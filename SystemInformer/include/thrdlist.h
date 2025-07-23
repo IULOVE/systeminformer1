@@ -63,6 +63,8 @@ typedef enum _PH_THREAD_TREELIST_COLUMN
     PH_THREAD_TREELIST_COLUMN_LXSSTID,
     PH_THREAD_TREELIST_COLUMN_POWERTHROTTLING,
     PH_THREAD_TREELIST_COLUMN_STARTADDRESS,
+    PH_THREAD_TREELIST_COLUMN_RPC,
+    PH_THREAD_TREELIST_COLUMN_ACTUALBASEPRIORITY,
     PH_THREAD_TREELIST_COLUMN_MAXIMUM,
 } PH_THREAD_TREELIST_COLUMN;
 
@@ -122,6 +124,7 @@ typedef struct _PH_THREAD_NODE
     NTSTATUS LastStatusValue;
     NTSTATUS LastStatusQueryStatus;
     PH_APARTMENT_INFO ApartmentInfo;
+    BOOLEAN HasRpcState;
 
     WCHAR CpuUsageText[PH_INT32_STR_LEN_1];
     WCHAR CpuUserUsageText[PH_INT32_STR_LEN_1];
@@ -129,7 +132,6 @@ typedef struct _PH_THREAD_NODE
     PPH_STRING CyclesDeltaText; // used for Context Switches Delta as well
     PPH_STRING ContextSwitchesDeltaText;
     PPH_STRING StartAddressText;
-    PPH_STRING PrioritySymbolicText;
     PPH_STRING CreatedText;
     PPH_STRING NameText;
     PPH_STRING StateText;
@@ -141,6 +143,7 @@ typedef struct _PH_THREAD_NODE
     WCHAR ContextSwitchesText[PH_INT64_STR_LEN_1];
     WCHAR PriorityText[PH_INT32_STR_LEN_1];
     WCHAR BasePriorityText[PH_INT32_STR_LEN_1];
+    WCHAR ActualBasePriorityText[PH_INT32_STR_LEN_1];
     WCHAR CyclesText[PH_INT64_STR_LEN_1];
     PPH_STRING KernelTimeText;
     PPH_STRING UserTimeText;

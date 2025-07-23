@@ -86,7 +86,7 @@ BOOLEAN PhpShowElevatePrompt(
     memset(&config, 0, sizeof(TASKDIALOGCONFIG));
     config.cbSize = sizeof(TASKDIALOGCONFIG);
     config.hwndParent = WindowHandle;
-    config.hInstance = PhInstanceHandle;
+    config.hInstance = NtCurrentImageBase();
     config.dwFlags = IsWindowVisible(WindowHandle) ? TDF_POSITION_RELATIVE_TO_WINDOW : 0;
     config.pszWindowTitle = PhApplicationName;
     config.pszMainIcon = TD_ERROR_ICON;
@@ -2813,7 +2813,7 @@ BOOLEAN PhUiDebugProcess(
 
 BOOLEAN PhUiReduceWorkingSetProcesses(
     _In_ HWND WindowHandle,
-    _In_ PPH_PROCESS_ITEM *Processes,
+    _In_ CONST PPH_PROCESS_ITEM *Processes,
     _In_ ULONG NumberOfProcesses
     )
 {
@@ -2851,6 +2851,44 @@ BOOLEAN PhUiReduceWorkingSetProcesses(
             success = FALSE;
 
             if (!PhpShowErrorProcess(WindowHandle, L"reduce the working set of", Processes[i], status, 0))
+                break;
+        }
+    }
+
+    return success;
+}
+
+BOOLEAN PhUiSetEmptyWorkingSetProcesses(
+    _In_ HWND WindowHandle,
+    _In_ CONST PPH_PROCESS_ITEM* Processes,
+    _In_ ULONG NumberOfProcesses
+    )
+{
+    BOOLEAN success = TRUE;
+    ULONG i;
+
+    for (i = 0; i < NumberOfProcesses; i++)
+    {
+        NTSTATUS status;
+        HANDLE processHandle;
+
+        status = PhOpenProcess(
+            &processHandle,
+            PROCESS_VM_OPERATION,
+            Processes[i]->ProcessId
+            );
+
+        if (NT_SUCCESS(status))
+        {
+            status = PhSetProcessWorkingSetEmpty(processHandle);
+            NtClose(processHandle);
+        }
+
+        if (!NT_SUCCESS(status))
+        {
+            success = FALSE;
+
+            if (!PhpShowErrorProcess(WindowHandle, L"empty the working set of", Processes[i], status, 0))
                 break;
         }
     }
@@ -3362,7 +3400,7 @@ BOOLEAN PhUiSetIoPriorityProcesses(
             }
             else
             {
-                // See comment in PhUiSetPriorityProcesses.
+                // See comment in PhUiSetPriorityClassProcesses.
                 status = STATUS_UNSUCCESSFUL;
             }
 
@@ -3433,7 +3471,7 @@ BOOLEAN PhUiSetPagePriorityProcess(
         }
         else
         {
-            // See comment in PhUiSetPriorityProcesses.
+            // See comment in PhUiSetPriorityClassProcesses.
             status = STATUS_UNSUCCESSFUL;
         }
 
@@ -3449,7 +3487,7 @@ BOOLEAN PhUiSetPagePriorityProcess(
     return TRUE;
 }
 
-BOOLEAN PhUiSetPriorityProcesses(
+BOOLEAN PhUiSetPriorityClassProcesses(
     _In_ HWND WindowHandle,
     _In_ PPH_PROCESS_ITEM *Processes,
     _In_ ULONG NumberOfProcesses,
@@ -3494,7 +3532,7 @@ BOOLEAN PhUiSetPriorityProcesses(
             // The operation may have failed due to the lack of SeIncreaseBasePriorityPrivilege.
             if (!cancelled && PhpShowErrorAndConnectToPhSvc(
                 WindowHandle,
-                PhaConcatStrings2(L"Unable to set the priority of ", Processes[i]->ProcessName->Buffer)->Buffer,
+                PhaConcatStrings2(L"Unable to set the priority class of ", Processes[i]->ProcessName->Buffer)->Buffer,
                 status,
                 &connected,
                 &cancelled
@@ -3505,7 +3543,7 @@ BOOLEAN PhUiSetPriorityProcesses(
                     if (NT_SUCCESS(status = PhSvcCallControlProcess(Processes[i]->ProcessId, PhSvcControlProcessPriority, PriorityClass)))
                         success = TRUE;
                     else
-                        PhpShowErrorProcess(WindowHandle, L"set the priority of", Processes[i], status, 0);
+                        PhpShowErrorProcess(WindowHandle, L"set the priority class of", Processes[i], status, 0);
 
                     PhUiDisconnectFromPhSvc();
                 }
@@ -3519,7 +3557,7 @@ BOOLEAN PhUiSetPriorityProcesses(
                 if (cancelled)
                     break;
 
-                if (!PhpShowErrorProcess(WindowHandle, L"set the priority of", Processes[i], status, 0))
+                if (!PhpShowErrorProcess(WindowHandle, L"set the priority class of", Processes[i], status, 0))
                     break;
             }
         }

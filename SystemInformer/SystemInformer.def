@@ -206,7 +206,7 @@ EXPORTS
     PhPluginQueryPhSvc
     PhPluginReserveIds
     PhPluginSetObjectExtension
-    PhRegisterPlugin
+    PhRegisterPluginByName
 
 ; phsvc
     PhSvcCallChangeServiceConfig
@@ -258,7 +258,7 @@ EXPORTS
     PhUiSetIoPriorityThread
     PhUiSetPagePriorityProcess
     PhUiSetPagePriorityThread
-    PhUiSetPriorityProcesses
+    PhUiSetPriorityClassProcesses
     PhUiSetPriorityThread
     PhUiSetPriorityThreads
     PhUiSetVirtualizationProcess

@@ -1090,24 +1090,9 @@ PVOID PhGetDllBaseProcedureAddress(
 
     if (exportAddress && exportSuppressionEnabled)
     {
-        PIMAGE_LOAD_CONFIG_DIRECTORY configDirectory;
-
-        if (NT_SUCCESS(PhGetLoaderEntryImageDirectory(
-            DllBase,
-            imageNtHeader,
-            IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG,
-            &dataDirectory,
-            &configDirectory,
-            NULL
-            )))
+        if (PhLoaderEntryImageExportSupressionPresent(DllBase, imageNtHeader))
         {
-            if (RTL_CONTAINS_FIELD(configDirectory, configDirectory->Size, GuardFlags))
-            {
-                if (BooleanFlagOn(configDirectory->GuardFlags, IMAGE_GUARD_CF_EXPORT_SUPPRESSION_INFO_PRESENT))
-                {
-                    PhLoaderEntryGrantSuppressedCall(exportAddress);
-                }
-            }
+            PhLoaderEntryGrantSuppressedCall(exportAddress);
         }
     }
 
@@ -1351,6 +1336,35 @@ NTSTATUS PhLoaderEntryImageRvaToVa(
         ));
 
     return STATUS_SUCCESS;
+}
+
+BOOLEAN PhLoaderEntryImageExportSupressionPresent(
+    _In_ PVOID BaseAddress,
+    _In_ PIMAGE_NT_HEADERS ImageNtHeader
+    )
+{
+    PIMAGE_LOAD_CONFIG_DIRECTORY configDirectory;
+    PIMAGE_DATA_DIRECTORY dataDirectory;
+
+    if (NT_SUCCESS(PhGetLoaderEntryImageDirectory(
+        BaseAddress,
+        ImageNtHeader,
+        IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG,
+        &dataDirectory,
+        &configDirectory,
+        NULL
+        )))
+    {
+        if (RTL_CONTAINS_FIELD(configDirectory, configDirectory->Size, GuardFlags))
+        {
+            if (BooleanFlagOn(configDirectory->GuardFlags, IMAGE_GUARD_CF_EXPORT_SUPPRESSION_INFO_PRESENT))
+            {
+                return TRUE;
+            }
+        }
+    }
+
+    return FALSE;
 }
 
 VOID PhLoaderEntryGrantSuppressedCall(
@@ -1604,13 +1618,13 @@ PVOID PhGetDllBaseProcedureAddressWithHint(
                     {
                         CHAR libraryFunctionName[DOS_MAX_PATH_LENGTH] = "";
 
-                        if (!PhConvertUtf16ToUtf8Buffer(
+                        if (!NT_SUCCESS(PhConvertUtf16ToUtf8Buffer(
                             libraryFunctionName,
                             sizeof(libraryFunctionName),
                             NULL,
                             dllProcedureRef.Buffer,
                             dllProcedureRef.Length
-                            ))
+                            )))
                         {
                             return NULL;
                         }
@@ -2298,19 +2312,17 @@ CleanupExit:
     return status;
 }
 
-NTSTATUS PhpLoaderEntryQuerySectionInformation(
+NTSTATUS PhLoaderEntryIsSectionImageExecutable(
     _In_ HANDLE SectionHandle
     )
 {
-    SECTION_IMAGE_INFORMATION section;
     NTSTATUS status;
-
-    memset(&section, 0, sizeof(SECTION_IMAGE_INFORMATION));
+    SECTION_IMAGE_INFORMATION sectionInfo;
 
     status = NtQuerySection(
         SectionHandle,
         SectionImageInformation,
-        &section,
+        &sectionInfo,
         sizeof(SECTION_IMAGE_INFORMATION),
         NULL
         );
@@ -2318,20 +2330,20 @@ NTSTATUS PhpLoaderEntryQuerySectionInformation(
     if (!NT_SUCCESS(status))
         return status;
 
-    if (section.SubSystemType != IMAGE_SUBSYSTEM_WINDOWS_GUI)
+    if (sectionInfo.SubSystemType != IMAGE_SUBSYSTEM_WINDOWS_GUI)
         return STATUS_INVALID_IMPORT_OF_NON_DLL;
-    if (!FlagOn(section.ImageCharacteristics, IMAGE_FILE_DLL | IMAGE_FILE_EXECUTABLE_IMAGE))
+    if (!FlagOn(sectionInfo.ImageCharacteristics, IMAGE_FILE_DLL | IMAGE_FILE_EXECUTABLE_IMAGE))
         return STATUS_INVALID_IMPORT_OF_NON_DLL;
 
 #ifdef _WIN64
-    if (section.Machine != IMAGE_FILE_MACHINE_AMD64 && section.Machine != IMAGE_FILE_MACHINE_ARM64)
+    if (sectionInfo.Machine != IMAGE_FILE_MACHINE_AMD64 && sectionInfo.Machine != IMAGE_FILE_MACHINE_ARM64)
         return STATUS_IMAGE_MACHINE_TYPE_MISMATCH;
 #else
-    if (section.Machine != IMAGE_FILE_MACHINE_I386)
+    if (sectionInfo.Machine != IMAGE_FILE_MACHINE_I386)
         return STATUS_IMAGE_MACHINE_TYPE_MISMATCH;
 #endif
 
-    return status;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS PhLoaderEntryRelocateImage(
@@ -2526,6 +2538,7 @@ PPH_STRING PhGetExportNameFromOrdinal(
 
 NTSTATUS PhLoaderEntryLoadDll(
     _In_ PCPH_STRINGREF FileName,
+    _In_opt_ HANDLE RootDirectory,
     _Out_ PVOID* BaseAddress
     )
 {
@@ -2535,14 +2548,17 @@ NTSTATUS PhLoaderEntryLoadDll(
     PVOID imageBaseAddress;
     SIZE_T imageBaseSize;
 
-    status = PhCreateFile(
+    status = PhCreateFileEx(
         &fileHandle,
         FileName,
         FILE_READ_DATA | FILE_EXECUTE | SYNCHRONIZE,
+        RootDirectory,
+        NULL,
         FILE_ATTRIBUTE_NORMAL,
         FILE_SHARE_READ,
         FILE_OPEN,
-        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT
+        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+        NULL
         );
 
     if (!NT_SUCCESS(status))
@@ -2562,7 +2578,7 @@ NTSTATUS PhLoaderEntryLoadDll(
     if (!NT_SUCCESS(status))
         return status;
 
-    status = PhpLoaderEntryQuerySectionInformation(
+    status = PhLoaderEntryIsSectionImageExecutable(
         sectionHandle
         );
 
@@ -2685,6 +2701,7 @@ NTSTATUS PhLoadAllImportsForDll(
 
 NTSTATUS PhLoadPluginImage(
     _In_ PCPH_STRINGREF FileName,
+    _In_opt_ HANDLE RootDirectory,
     _Out_opt_ PVOID *BaseAddress
     )
 {
@@ -2713,6 +2730,7 @@ NTSTATUS PhLoadPluginImage(
 
     status = PhLoaderEntryLoadDll(
         FileName,
+        RootDirectory,
         &imageBaseAddress
         );
 #endif

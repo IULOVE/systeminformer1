@@ -156,7 +156,7 @@ VOID PhShowRunAsDialog(
     )
 {
     PhDialogBox(
-        PhInstanceHandle,
+        NtCurrentImageBase(),
         MAKEINTRESOURCE(IDD_RUNAS),
         PhCsForceNoParent ? NULL : ParentWindowHandle,
         PhpRunAsDlgProc,
@@ -178,7 +178,7 @@ BOOLEAN PhShowRunFileDialog(
     //}
 
     if (PhDialogBox(
-        PhInstanceHandle,
+        NtCurrentImageBase(),
         MAKEINTRESOURCE(IDD_RUNFILEDLG),
         ParentWindowHandle,
         PhpRunFileWndProc,
@@ -224,7 +224,7 @@ VOID PhShowRunAsPackageDialog(
     )
 {
     PhDialogBox(
-        PhInstanceHandle,
+        NtCurrentImageBase(),
         MAKEINTRESOURCE(IDD_RUNPACKAGE),
         NULL,
         PhRunAsPackageWndProc,
@@ -822,7 +822,8 @@ NTSTATUS PhRunAsExecutionAlias(
 NTSTATUS PhRunAsExecuteParentCommand(
     _In_ HWND WindowHandle,
     _In_ PCWSTR CommandLine,
-    _In_ HANDLE ProcessId
+    _In_ HANDLE ProcessId,
+    _In_ BOOLEAN CreateSuspendedProcess
     )
 {
     NTSTATUS status;
@@ -963,9 +964,12 @@ NTSTATUS PhRunAsExecuteParentCommand(
             AllowSetForegroundWindow(HandleToUlong(basicInfo.UniqueProcessId));
         }
 
-        PhConsoleSetForeground(newProcessHandle, TRUE);
+        if (!CreateSuspendedProcess)
+        {
+            PhConsoleSetForeground(newProcessHandle, TRUE);
 
-        NtResumeProcess(newProcessHandle);
+            NtResumeProcess(newProcessHandle);
+        }
 
         NtClose(newProcessHandle);
     }
@@ -1139,6 +1143,7 @@ VOID PhRunAsExecuteCommmand(
             &createInfo,
             PH_CREATE_PROCESS_WITH_PROFILE | PH_CREATE_PROCESS_DEFAULT_ERROR_MODE | (createSuspended ? PH_CREATE_PROCESS_SUSPENDED : 0),
             NULL,
+            NULL,
             &newProcessHandle,
             NULL
             );
@@ -1181,7 +1186,8 @@ VOID PhRunAsExecuteCommmand(
                 status = PhRunAsExecuteParentCommand(
                     Context->WindowHandle,
                     PhGetString(program),
-                    ProcessId
+                    ProcessId,
+                    createSuspended
                     );
             }
         }
@@ -1487,7 +1493,8 @@ NTSTATUS PhRunAsUpdateDesktop(
             if (currentDaclPresent && currentDacl)
                 newDaclLength += currentDacl->AclSize - sizeof(ACL);
 
-            newDacl = PhAllocate(newDaclLength);
+            newDacl = PhAllocateStack(newDaclLength);
+            RtlZeroMemory(newDacl, newDaclLength);
 
             status = PhCreateAcl(newDacl, newDaclLength, ACL_REVISION);
 
@@ -2131,6 +2138,7 @@ NTSTATUS PhInvokeRunAsService(
     status = PhCreateProcessAsUser(
         &createInfo,
         flags,
+        NULL,
         NULL,
         &newProcessHandle,
         NULL
@@ -3258,14 +3266,20 @@ BOOLEAN NTAPI PhRunAsPackageTreeNewCallback(
 
                     if (context->ImageListHandle)
                     {
+                        LONG width;
+                        LONG height;
+
+                        width = PhGetSystemMetrics(SM_CXICON, context->WindowDpi);
+                        height = PhGetSystemMetrics(SM_CYICON, context->WindowDpi);
+
                         PhImageListDrawEx(
                             context->ImageListHandle,
                             (ULONG)(ULONG_PTR)node->IconIndex,
                             customDraw->Dc,
-                            customDraw->CellRect.left + 5,
-                            customDraw->CellRect.top + ((customDraw->CellRect.bottom - customDraw->CellRect.top) - 32) / 2,
-                            32,
-                            32,
+                            customDraw->CellRect.left + 5,//((customDraw->CellRect.right - customDraw->CellRect.left) - width) / 2,
+                            customDraw->CellRect.top + ((customDraw->CellRect.bottom - customDraw->CellRect.top) - height) / 2,
+                            width,
+                            height,
                             CLR_DEFAULT,
                             CLR_NONE,
                             ILD_TRANSPARENT,
@@ -3386,7 +3400,6 @@ VOID PhRunAsPackageInitializeTree(
     Context->TitleFontHandle = PhCreateCommonFont(-14, FW_BOLD, NULL, Context->WindowDpi);
 
     PhSetControlTheme(Context->TreeNewHandle, L"explorer");
-
     TreeNew_SetRedraw(Context->TreeNewHandle, FALSE);
     TreeNew_SetCallback(Context->TreeNewHandle, PhRunAsPackageTreeNewCallback, Context);
     TreeNew_SetRowHeight(Context->TreeNewHandle, PhGetDpi(48, Context->WindowDpi));
@@ -3444,10 +3457,15 @@ static VOID PhRunAsPackageSetImagelist(
     _Inout_ PPH_RUNAS_PACKAGE_CONTEXT Context
     )
 {
-    PhImageListDestroy(Context->ImageListHandle);
+    if (Context->ImageListHandle)
+    {
+        PhImageListDestroy(Context->ImageListHandle);
+        Context->ImageListHandle = NULL;
+    }
+
     Context->ImageListHandle = PhImageListCreate(
-        PhGetSystemMetrics(SM_CXSMICON, Context->WindowDpi),
-        PhGetSystemMetrics(SM_CYSMICON, Context->WindowDpi),
+        PhGetSystemMetrics(SM_CXICON, Context->WindowDpi),
+        PhGetSystemMetrics(SM_CYICON, Context->WindowDpi),
         ILC_MASK | ILC_COLOR32,
         20,
         10
@@ -3670,6 +3688,7 @@ INT_PTR CALLBACK PhRunAsPackageWndProc(
                         {
                             PPH_STRING argumentsString = NULL;
                             PPH_STRING commandString = NULL;
+                            PPH_STRING directoryString = NULL;
                             PPH_STRING fullFileName = NULL;
                             PH_STRINGREF fileName;
                             PH_STRINGREF arguments;
@@ -3689,11 +3708,14 @@ INT_PTR CALLBACK PhRunAsPackageWndProc(
                             {
                                 argumentsString = PhCreateString2(&arguments);
                             }
+         
+                            directoryString = PhpQueryRunFileParentDirectory(!!PhGetOwnTokenAttributes().Elevated);
 
                             status = PhCreateProcessDesktopPackage(
                                 PhGetString(node->AppUserModelId),
                                 PhGetString(fullFileName),
                                 PhGetString(argumentsString),
+                                PhGetString(directoryString),
                                 FALSE,
                                 NULL,
                                 NULL
@@ -3710,6 +3732,7 @@ INT_PTR CALLBACK PhRunAsPackageWndProc(
                                 PhShowStatus(WindowHandle, L"Unable to execute the command.", 0, status);
                             }
 
+                            PhClearReference(&directoryString);
                             PhClearReference(&argumentsString);
                             PhClearReference(&fullFileName);
                             PhClearReference(&commandString);

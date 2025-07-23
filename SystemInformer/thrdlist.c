@@ -62,7 +62,7 @@ PPH_STRING PhGetApartmentTypeString(
     );
 
 PPH_STRING PhGetApartmentFlagsString(
-    _In_ OLETLSFLAGS ApartmentState
+    _In_ ULONG ApartmentState
     );
 
 VOID PhInitializeThreadList(
@@ -138,6 +138,8 @@ VOID PhInitializeThreadList(
     PhAddTreeNewColumn(TreeNewHandle, PH_THREAD_TREELIST_COLUMN_POWERTHROTTLING, FALSE, L"Power throttling", 50, PH_ALIGN_LEFT, ULONG_MAX, 0);
     //PhAddTreeNewColumn(TreeNewHandle, PH_THREAD_TREELIST_COLUMN_CONTAINERID, FALSE, L"Container ID", 50, PH_ALIGN_LEFT, ULONG_MAX, 0);
     PhAddTreeNewColumn(TreeNewHandle, PH_THREAD_TREELIST_COLUMN_STARTADDRESS, FALSE, L"Start address (Native)", 180, PH_ALIGN_LEFT, ULONG_MAX, 0);
+    PhAddTreeNewColumn(TreeNewHandle, PH_THREAD_TREELIST_COLUMN_RPC, FALSE, L"RPC usage", 50, PH_ALIGN_LEFT, ULONG_MAX, 0);
+    PhAddTreeNewColumn(TreeNewHandle, PH_THREAD_TREELIST_COLUMN_ACTUALBASEPRIORITY, FALSE, L"Base priority (actual)", 80, PH_ALIGN_LEFT, ULONG_MAX, 0);
 
     PhCmInitializeManager(&Context->Cm, TreeNewHandle, PH_THREAD_TREELIST_COLUMN_MAXIMUM, PhpThreadTreeNewPostSortFunction);
     PhInitializeTreeNewFilterSupport(&Context->TreeFilterSupport, Context->TreeNewHandle, Context->NodeList);
@@ -350,7 +352,6 @@ VOID PhpDestroyThreadNode(
     if (ThreadNode->CyclesDeltaText) PhDereferenceObject(ThreadNode->CyclesDeltaText);
     if (ThreadNode->ContextSwitchesDeltaText) PhDereferenceObject(ThreadNode->ContextSwitchesDeltaText);
     if (ThreadNode->StartAddressText) PhDereferenceObject(ThreadNode->StartAddressText);
-    if (ThreadNode->PrioritySymbolicText) PhDereferenceObject(ThreadNode->PrioritySymbolicText);
     if (ThreadNode->CreatedText) PhDereferenceObject(ThreadNode->CreatedText);
     if (ThreadNode->NameText) PhDereferenceObject(ThreadNode->NameText);
     if (ThreadNode->StateText) PhDereferenceObject(ThreadNode->StateText);
@@ -728,6 +729,48 @@ VOID PhpUpdateThreadNodeApartmentState(
     }
 }
 
+VOID PhpUpdateThreadNodeRpc(
+    _In_ PPH_THREAD_LIST_CONTEXT Context,
+    _In_ PPH_THREAD_NODE ThreadNode
+    )
+{
+    NTSTATUS status = STATUS_UNSUCCESSFUL;
+    BOOLEAN hasRpcState = FALSE;
+
+    if (!ThreadNode->ThreadReadVmHandleValid)
+    {
+        if (!ThreadNode->ThreadReadVmHandle)
+        {
+            if (ThreadNode->ThreadItem->ThreadHandle)
+            {
+                HANDLE processHandle;
+
+                if (NT_SUCCESS(PhOpenProcess(
+                    &processHandle,
+                    PROCESS_VM_READ | (WindowsVersion > WINDOWS_7 ? PROCESS_QUERY_LIMITED_INFORMATION : PROCESS_QUERY_INFORMATION),
+                    Context->ProcessId
+                    )))
+                {
+                    ThreadNode->ThreadReadVmHandle = processHandle;
+                }
+            }
+        }
+
+        ThreadNode->ThreadReadVmHandleValid = TRUE;
+    }
+
+    if (ThreadNode->ThreadItem->ThreadHandle && ThreadNode->ThreadReadVmHandle)
+    {
+        status = PhGetThreadRpcState(
+            ThreadNode->ThreadItem->ThreadHandle,
+            ThreadNode->ThreadReadVmHandle,
+            &hasRpcState
+            );
+    }
+
+    ThreadNode->HasRpcState = NT_SUCCESS(status) && hasRpcState;
+}
+
 VOID PhpUpdateThreadNodeFiber(
     _In_ PPH_THREAD_LIST_CONTEXT Context,
     _In_ PPH_THREAD_NODE ThreadNode
@@ -911,7 +954,7 @@ END_SORT_FUNCTION
 
 BEGIN_SORT_FUNCTION(PrioritySymbolic)
 {
-    sortResult = intcmp(threadItem1->BasePriorityIncrement, threadItem2->BasePriorityIncrement);
+    sortResult = intcmp(threadItem1->BasePriority, threadItem2->BasePriority);
 }
 END_SORT_FUNCTION
 
@@ -1241,6 +1284,21 @@ BEGIN_SORT_FUNCTION(StartAddressKernel)
 }
 END_SORT_FUNCTION
 
+BEGIN_SORT_FUNCTION(HasRpc)
+{
+    PhpUpdateThreadNodeRpc(context, node1);
+    PhpUpdateThreadNodeRpc(context, node2);
+
+    sortResult = ucharcmp(node1->HasRpcState, node2->HasRpcState);
+}
+END_SORT_FUNCTION
+
+BEGIN_SORT_FUNCTION(ActualBasePriority)
+{
+    sortResult = intcmp(threadItem1->ActualBasePriority, threadItem2->ActualBasePriority);
+}
+END_SORT_FUNCTION
+
 BOOLEAN NTAPI PhpThreadTreeNewCallback(
     _In_ HWND hwnd,
     _In_ PH_TREENEW_MESSAGE Message,
@@ -1310,6 +1368,8 @@ BOOLEAN NTAPI PhpThreadTreeNewCallback(
                     SORT_FUNCTION(LxssTid),
                     SORT_FUNCTION(PowerThrottling),
                     SORT_FUNCTION(StartAddressKernel),
+                    SORT_FUNCTION(HasRpc),
+                    SORT_FUNCTION(ActualBasePriority),
                 };
                 int (__cdecl *sortFunction)(void *, const void *, const void *);
 
@@ -1497,8 +1557,7 @@ BOOLEAN NTAPI PhpThreadTreeNewCallback(
                 break;
             case PH_THREAD_TREELIST_COLUMN_PRIORITYSYMBOLIC:
                 {
-                    PhMoveReference(&node->PrioritySymbolicText, PhGetBasePriorityIncrementString(threadItem->BasePriorityIncrement));
-                    getCellText->Text = PhGetStringRef(node->PrioritySymbolicText);
+                    getCellText->Text = *PhGetBasePrioritySymbolicString(threadItem->BasePriority);
                 }
                 break;
             case PH_THREAD_TREELIST_COLUMN_SERVICE:
@@ -2207,6 +2266,40 @@ BOOLEAN NTAPI PhpThreadTreeNewCallback(
                     }
                 }
                 break;
+            case PH_THREAD_TREELIST_COLUMN_RPC:
+                {
+                    if (context->ProcessId == SYSTEM_IDLE_PROCESS_ID || context->ProcessId == SYSTEM_PROCESS_ID)
+                    {
+                        PhInitializeEmptyStringRef(&getCellText->Text);
+                        break;
+                    }
+
+                    PhpUpdateThreadNodeRpc(context, node);
+
+                    if (node->HasRpcState)
+                    {
+                        PhInitializeStringRef(&getCellText->Text, L"Yes");
+                    }
+                    else
+                    {
+                        PhInitializeEmptyStringRef(&getCellText->Text);
+                    }
+                }
+                break;
+            case PH_THREAD_TREELIST_COLUMN_ACTUALBASEPRIORITY:
+                {
+                    SIZE_T returnLength;
+                    PH_FORMAT format[1];
+
+                    PhInitFormatD(&format[0], threadItem->ActualBasePriority);
+
+                    if (PhFormatToBuffer(format, 1, node->ActualBasePriorityText, sizeof(node->ActualBasePriorityText), &returnLength))
+                    {
+                        getCellText->Text.Buffer = node->ActualBasePriorityText;
+                        getCellText->Text.Length = returnLength - sizeof(UNICODE_NULL);
+                    }
+                }
+                break;
             default:
                 return FALSE;
             }
@@ -2419,9 +2512,6 @@ PPH_STRING PhGetApartmentTypeString(
     case PH_APARTMENT_TYPE_APPLICATION_STA:
         PhInitFormatS(&format[count++], L"ASTA");
         break;
-    case PH_APARTMENT_TYPE_MAIN_APPLICATION_STA:
-        PhInitFormatS(&format[count++], L"Main ASTA");
-        break;
     case PH_APARTMENT_TYPE_MTA:
         PhInitFormatS(&format[count++], L"MTA");
         break;
@@ -2443,11 +2533,10 @@ PPH_STRING PhGetApartmentTypeString(
 }
 
 PPH_STRING PhGetApartmentFlagsString(
-    _In_ OLETLSFLAGS ApartmentState
+    _In_ ULONG ApartmentState
     )
 {
-#define PH_OLE_TLS_FLAG(x, n) { TEXT(#x), x, FALSE, FALSE, n }
-
+#define PH_OLE_TLS_FLAG(x, n) { TEXT(#x), (x), FALSE, FALSE, (n) }
     static const PH_ACCESS_ENTRY oleTlsflags[] =
     {
         PH_OLE_TLS_FLAG(OLETLS_LOCALTID, L"Local TID"),
@@ -2487,7 +2576,11 @@ PPH_STRING PhGetApartmentFlagsString(
     PPH_STRING string;
     PH_FORMAT format[4];
 
-    string = PhGetAccessString(ApartmentState, (PPH_ACCESS_ENTRY)oleTlsflags, RTL_NUMBER_OF(oleTlsflags));
+    string = PhGetAccessString(
+        ApartmentState,
+        (PPH_ACCESS_ENTRY)oleTlsflags,
+        RTL_NUMBER_OF(oleTlsflags)
+        );
 
     PhInitFormatSR(&format[0], string->sr);
     PhInitFormatS(&format[1], L" (0x");
@@ -2495,5 +2588,6 @@ PPH_STRING PhGetApartmentFlagsString(
     PhInitFormatC(&format[3], L')');
 
     PhMoveReference(&string, PhFormat(format, RTL_NUMBER_OF(format), 10));
+
     return string;
 }

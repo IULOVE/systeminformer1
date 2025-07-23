@@ -13,9 +13,9 @@
 #include <phapp.h>
 #include <phsvccl.h>
 
-HANDLE PhSvcClPortHandle;
-PVOID PhSvcClPortHeap;
-HANDLE PhSvcClServerProcessId;
+HANDLE PhSvcClPortHandle = NULL;
+PVOID PhSvcClPortHeap = NULL;
+HANDLE PhSvcClServerProcessId = NULL;
 
 NTSTATUS PhSvcConnectToServer(
     _In_ PUNICODE_STRING PortName,
@@ -71,7 +71,7 @@ NTSTATUS PhSvcConnectToServer(
     securityQos.EffectiveOnly = TRUE;
 
     connectInfoLength = sizeof(PHSVC_API_CONNECTINFO);
-    connectInfo.ServerProcessId = ULONG_MAX;
+    connectInfo.ServerProcessId = 0;
 
     status = NtConnectPort(
         &PhSvcClPortHandle,
@@ -140,7 +140,7 @@ VOID PhSvcDisconnectFromServer(
         PhSvcClPortHandle = NULL;
     }
 
-    PhSvcClServerProcessId = NULL;
+    PhSvcClServerProcessId = 0;
 }
 
 _Success_(return != NULL)

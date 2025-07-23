@@ -297,6 +297,14 @@ PhLoaderEntryImageRvaToVa(
     );
 
 PHLIBAPI
+BOOLEAN
+NTAPI
+PhLoaderEntryImageExportSupressionPresent(
+    _In_ PVOID BaseAddress,
+    _In_ PIMAGE_NT_HEADERS ImageNtHeader
+    );
+
+PHLIBAPI
 VOID
 NTAPI
 PhLoaderEntryGrantSuppressedCall(
@@ -338,6 +346,7 @@ NTSTATUS
 NTAPI
 PhLoaderEntryLoadDll(
     _In_ PCPH_STRINGREF FileName,
+    _In_opt_ HANDLE RootDirectory,
     _Out_ PVOID* BaseAddress
     );
 
@@ -362,6 +371,7 @@ NTSTATUS
 NTAPI
 PhLoadPluginImage(
     _In_ PCPH_STRINGREF FileName,
+    _In_opt_ HANDLE RootDirectory,
     _Out_opt_ PVOID *BaseAddress
     );
 

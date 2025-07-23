@@ -14,26 +14,6 @@
 #include <phintrnl.h>
 #include <trace.h>
 
-VOID PhInitializeRuntimeInformation(
-    VOID
-    );
-
-NTSTATUS PhInitializeSystemInformation(
-    VOID
-    );
-
-NTSTATUS PhInitializeWindowsInformation(
-    VOID
-    );
-
-NTSTATUS PhHeapInitialization(
-    VOID
-    );
-
-NTSTATUS PhInitializeProcessorInformation(
-    VOID
-    );
-
 PVOID PhInstanceHandle = NULL;
 PCWSTR PhApplicationName = NULL;
 HANDLE PhHeapHandle = NULL;
@@ -98,7 +78,7 @@ BOOLEAN PhIsExecutingInWow64(
 #endif
 }
 
-VOID PhInitializeRuntimeInformation(
+NTSTATUS PhInitializeRuntimeInformation(
     VOID
     )
 {
@@ -109,6 +89,8 @@ VOID PhInitializeRuntimeInformation(
 
     // Enable UTF8 CRT support.
     //_wsetlocale(LC_ALL, L".UTF8");
+
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS PhInitializeSystemInformation(
@@ -195,9 +177,13 @@ NTSTATUS PhInitializeWindowsInformation(
     // Windows 10, Windows Server 2016
     else if (majorVersion == 10 && minorVersion == 0)
     {
-        if (buildVersion > 26100)
+        if (buildVersion > 26200)
         {
             WindowsVersion = WINDOWS_NEW;
+        }
+        else if (buildVersion >= 26200)
+        {
+            WindowsVersion = WINDOWS_11_25H2;
         }
         else if (buildVersion >= 26100)
         {

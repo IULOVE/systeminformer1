@@ -2793,9 +2793,9 @@ NTSTATUS PhGetMappedImageResource(
     _In_ PPH_MAPPED_IMAGE MappedImage,
     _In_ PCWSTR Name,
     _In_ PCWSTR Type,
-    _In_ USHORT Language,
-    _Out_opt_ ULONG *ResourceLength,
-    _Out_opt_ PVOID *ResourceBuffer
+    _In_opt_ USHORT Language,
+    _Out_opt_ PULONG ResourceLength,
+    _Out_opt_ PVOID* ResourceBuffer
     )
 {
     NTSTATUS status;
@@ -3378,7 +3378,7 @@ NTSTATUS PhGetMappedImageProdIdHeader(
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
-                continue;
+                return GetExceptionCode();
             }
 
             richHeaderValue += _rotl(value, i);
@@ -3399,7 +3399,7 @@ NTSTATUS PhGetMappedImageProdIdHeader(
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
-                continue;
+                return GetExceptionCode();
             }
 
             prodid = entry->dwProdid ^ richHeaderKey;
@@ -3427,8 +3427,7 @@ NTSTATUS PhGetMappedImageProdIdHeader(
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
-                //return GetExceptionCode();
-                continue;
+                return GetExceptionCode();
             }
 
             // The prodid header can include 3 extra checksum values. Ignore these for now (dmex)

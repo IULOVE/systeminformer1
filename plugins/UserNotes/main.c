@@ -316,6 +316,7 @@ VOID NTAPI ShowOptionsCallback(
         );
 }
 
+_Function_class_(PH_CALLBACK_FUNCTION)
 VOID NTAPI MainMenuInitializingCallback(
     _In_ PVOID Parameter,
     _In_opt_ PVOID Context
@@ -2321,7 +2322,7 @@ VOID AddSavePriorityMenuItemsAndHook(
     }
 
     // Priority
-    if (priorityMenuItem = PhFindEMenuItem(MenuInfo->Menu, 0, NULL, PHAPP_ID_PROCESS_PRIORITY))
+    if (priorityMenuItem = PhFindEMenuItem(MenuInfo->Menu, 0, NULL, PHAPP_ID_PROCESS_PRIORITYCLASS))
     {
         PhInsertEMenuItem(priorityMenuItem, PhCreateEMenuSeparator(), ULONG_MAX);
         PhInsertEMenuItem(priorityMenuItem, saveMenuItem = PhPluginCreateEMenuItem(PluginInstance, 0, PROCESS_PRIORITY_SAVE_ID, PhaFormatString(L"&Save for %s", ProcessItem->ProcessName->Buffer)->Buffer, NULL), ULONG_MAX);

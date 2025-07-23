@@ -657,16 +657,6 @@ VOID PhMwpOnSettingChange(
 
     if (Action == 0 && Metric)
     {
-        // Reload environment variables
-
-        if (PhEqualStringZ(Metric, L"Environment", TRUE))
-        {
-            // Reload the environment so when the user starts
-            // processes via the run menu they're created
-            // with the correct environment variables. (dmex)
-            PhRegenerateUserEnvironment(NULL, TRUE);
-        }
-
         // Reload dark theme metrics
 
         //if (PhEqualStringZ(Metric, L"ImmersiveColorSet", TRUE))
@@ -984,7 +974,11 @@ VOID PhMwpOnCommand(
                         mode = PH_EXPORT_MODE_TABS;
 
                     PhWriteStringAsUtf8FileStream(fileStream, (PPH_STRINGREF)&PhUnicodeByteOrderMark);
-                    PhWritePhTextHeader(fileStream);
+
+                    if (mode != PH_EXPORT_MODE_CSV)
+                    {
+                        PhWritePhTextHeader(fileStream);
+                    }
 
                     exportContent.FileStream = fileStream;
                     exportContent.Mode = mode;
@@ -1059,6 +1053,16 @@ VOID PhMwpOnCommand(
             PhMwpExecuteNotificationSettingsMenuCommand(WindowHandle, Id);
         }
         break;
+    case ID_VIEW_COLLAPSEALL:
+        {
+            PhExpandAllProcessNodes(FALSE);
+        }
+        break;
+    case ID_VIEW_EXPANDALL:
+        {
+            PhExpandAllProcessNodes(TRUE);
+        }
+        break;
     case ID_VIEW_HIDEPROCESSESFROMOTHERUSERS:
         {
             PhMwpToggleCurrentUserProcessTreeFilter();
@@ -1077,6 +1081,16 @@ VOID PhMwpOnCommand(
     case ID_VIEW_SCROLLTONEWPROCESSES:
         {
             PH_SET_INTEGER_CACHED_SETTING(ScrollToNewProcesses, !PhCsScrollToNewProcesses);
+        }
+        break;
+    case ID_VIEW_SORTCHILDPROCESSES:
+        {
+            PH_SET_INTEGER_CACHED_SETTING(SortChildProcesses, !PhCsSortChildProcesses);
+        }
+        break;
+    case ID_VIEW_SORTROOTPROCESSES:
+        {
+            PH_SET_INTEGER_CACHED_SETTING(SortRootProcesses, !PhCsSortRootProcesses);
         }
         break;
     case ID_VIEW_SHOWCPUBELOW001:
@@ -1867,7 +1881,7 @@ VOID PhMwpOnCommand(
             if (PhGetSelectedProcessItems(&processes, &numberOfProcesses))
             {
                 PhReferenceObjects(processes, numberOfProcesses);
-                PhMwpExecuteProcessPriorityCommand(WindowHandle, Id, processes, numberOfProcesses);
+                PhMwpExecuteProcessPriorityClassCommand(WindowHandle, Id, processes, numberOfProcesses);
                 PhDereferenceObjects(processes, numberOfProcesses);
                 PhFree(processes);
             }
@@ -3777,19 +3791,22 @@ VOID PhMwpInitializeSectionMenuItems(
     _In_ ULONG StartIndex
     )
 {
-    if (CurrentPage)
+    BOOLEAN removeSeparator = TRUE;
+    PH_MAIN_TAB_PAGE_MENU_INFORMATION menuInfo;
+
+    menuInfo.Menu = Menu;
+    menuInfo.StartIndex = StartIndex;
+
+    for (ULONG i = PageList->Count; i > 0; i--)
     {
-        PH_MAIN_TAB_PAGE_MENU_INFORMATION menuInfo;
+        PPH_MAIN_TAB_PAGE page = PageList->Items[i - 1];
 
-        menuInfo.Menu = Menu;
-        menuInfo.StartIndex = StartIndex;
-
-        if (!CurrentPage->Callback(CurrentPage, MainTabPageInitializeSectionMenuItems, &menuInfo, NULL))
-        {
-            // Remove the extra separator.
-            PhRemoveEMenuItem(Menu, NULL, StartIndex);
-        }
+        if (page->Callback(CurrentPage, MainTabPageInitializeSectionMenuItems, &menuInfo, NULL))
+            removeSeparator = FALSE;
     }
+
+    if (removeSeparator)
+        PhRemoveEMenuItem(Menu, NULL, StartIndex);
 }
 
 VOID PhMwpLayoutTabControl(
@@ -4040,7 +4057,7 @@ VOID PhAddMiniProcessMenuItems(
 
     // Priority
 
-    priorityMenu = PhCreateEMenuItem(0, ID_PROCESS_PRIORITY, L"&Priority", NULL, ProcessId);
+    priorityMenu = PhCreateEMenuItem(0, ID_PROCESS_PRIORITYCLASS, L"&Priority class", NULL, ProcessId);
 
     PhInsertEMenuItem(priorityMenu, PhCreateEMenuItem(0, ID_PRIORITY_REALTIME, L"&Real time", NULL, ProcessId), ULONG_MAX);
     PhInsertEMenuItem(priorityMenu, PhCreateEMenuItem(0, ID_PRIORITY_HIGH, L"&High", NULL, ProcessId), ULONG_MAX);
@@ -4142,7 +4159,7 @@ BOOLEAN PhHandleMiniProcessMenuItem(
 
             if (processItem = PhReferenceProcessItem(processId))
             {
-                PhMwpExecuteProcessPriorityCommand(PhMainWndHandle, MenuItem->Id, &processItem, 1);
+                PhMwpExecuteProcessPriorityClassCommand(PhMainWndHandle, MenuItem->Id, &processItem, 1);
                 PhDereferenceObject(processItem);
             }
             else

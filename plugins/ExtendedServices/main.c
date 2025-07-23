@@ -243,7 +243,7 @@ VOID NTAPI ProcessMenuInitializingCallback(
         priorityMenuItem = PhFindEMenuItem(menuInfo->Menu, 0, NULL, PHAPP_ID_PROCESS_IOPRIORITY);
 
         if (!priorityMenuItem)
-            priorityMenuItem = PhFindEMenuItem(menuInfo->Menu, 0, NULL, PHAPP_ID_PROCESS_PRIORITY);
+            priorityMenuItem = PhFindEMenuItem(menuInfo->Menu, 0, NULL, PHAPP_ID_PROCESS_PRIORITYCLASS);
 
         if (priorityMenuItem)
             insertIndex = PhIndexOfEMenuItem(menuInfo->Menu, priorityMenuItem) + 1;
@@ -269,7 +269,7 @@ VOID NTAPI ServicePropertiesInitializingCallback(
     {
         memset(&propSheetPage, 0, sizeof(PROPSHEETPAGE));
         propSheetPage.dwSize = sizeof(PROPSHEETPAGE);
-        propSheetPage.hInstance = PluginInstance->DllBase;
+        propSheetPage.hInstance = NtCurrentImageBase();
         propSheetPage.lParam = (LPARAM)serviceItem;
 
         if (!FlagOn(serviceItem->Flags, SERVICE_RUNS_IN_SYSTEM_PROCESS))
@@ -294,7 +294,7 @@ VOID NTAPI ServicePropertiesInitializingCallback(
         memset(&propSheetPage, 0, sizeof(PROPSHEETPAGE));
         propSheetPage.dwSize = sizeof(PROPSHEETPAGE);
         propSheetPage.dwFlags = PSP_USETITLE;
-        propSheetPage.hInstance = PluginInstance->DllBase;
+        propSheetPage.hInstance = NtCurrentImageBase();
         propSheetPage.pszTemplate = MAKEINTRESOURCE(IDD_SRVLIST);
         propSheetPage.pszTitle = L"Dependencies";
         propSheetPage.pfnDlgProc = EspServiceDependenciesDlgProc;
@@ -308,7 +308,7 @@ VOID NTAPI ServicePropertiesInitializingCallback(
         memset(&propSheetPage, 0, sizeof(PROPSHEETPAGE));
         propSheetPage.dwSize = sizeof(PROPSHEETPAGE);
         propSheetPage.dwFlags = PSP_USETITLE;
-        propSheetPage.hInstance = PluginInstance->DllBase;
+        propSheetPage.hInstance = NtCurrentImageBase();
         propSheetPage.pszTemplate = MAKEINTRESOURCE(IDD_SRVLIST);
         propSheetPage.pszTitle = L"Dependents";
         propSheetPage.pfnDlgProc = EspServiceDependentsDlgProc;
@@ -322,7 +322,7 @@ VOID NTAPI ServicePropertiesInitializingCallback(
         memset(&propSheetPage, 0, sizeof(PROPSHEETPAGE));
         propSheetPage.dwSize = sizeof(PROPSHEETPAGE);
         propSheetPage.dwFlags = PSP_USETITLE;
-        propSheetPage.hInstance = PluginInstance->DllBase;
+        propSheetPage.hInstance = NtCurrentImageBase();
         propSheetPage.pszTemplate = MAKEINTRESOURCE(IDD_SRVTRIGGERS);
         propSheetPage.pszTitle = L"Triggers";
         propSheetPage.pfnDlgProc = EspServiceTriggersDlgProc;
@@ -336,7 +336,7 @@ VOID NTAPI ServicePropertiesInitializingCallback(
         memset(&propSheetPage, 0, sizeof(PROPSHEETPAGE));
         propSheetPage.dwSize = sizeof(PROPSHEETPAGE);
         propSheetPage.dwFlags = PSP_USETITLE;
-        propSheetPage.hInstance = PluginInstance->DllBase;
+        propSheetPage.hInstance = NtCurrentImageBase();
         propSheetPage.pszTemplate = MAKEINTRESOURCE(IDD_SRVPACKAGE);
         propSheetPage.pszTitle = L"Package";
         propSheetPage.pfnDlgProc = EspPackageServiceDlgProc;
@@ -350,7 +350,7 @@ VOID NTAPI ServicePropertiesInitializingCallback(
         memset(&propSheetPage, 0, sizeof(PROPSHEETPAGE));
         propSheetPage.dwSize = sizeof(PROPSHEETPAGE);
         propSheetPage.dwFlags = PSP_USETITLE;
-        propSheetPage.hInstance = PluginInstance->DllBase;
+        propSheetPage.hInstance = NtCurrentImageBase();
         propSheetPage.pszTemplate = MAKEINTRESOURCE(IDD_SRVPNP);
         propSheetPage.pszTitle = L"PnP";
         propSheetPage.pfnDlgProc = EspPnPServiceDlgProc;
@@ -364,7 +364,7 @@ VOID NTAPI ServicePropertiesInitializingCallback(
         memset(&propSheetPage, 0, sizeof(PROPSHEETPAGE));
         propSheetPage.dwSize = sizeof(PROPSHEETPAGE);
         propSheetPage.dwFlags = PSP_USETITLE;
-        propSheetPage.hInstance = PluginInstance->DllBase;
+        propSheetPage.hInstance = NtCurrentImageBase();
         propSheetPage.pszTemplate = MAKEINTRESOURCE(IDD_SRVOTHER);
         propSheetPage.pszTitle = L"Other";
         propSheetPage.pfnDlgProc = EspServiceOtherDlgProc;
@@ -553,7 +553,7 @@ VOID MiListSectionMenuInitializingCallback(
         priorityMenuItem = PhFindEMenuItem(menuInfo->Menu, 0, NULL, PHAPP_ID_PROCESS_IOPRIORITY);
 
         if (!priorityMenuItem)
-            priorityMenuItem = PhFindEMenuItem(menuInfo->Menu, 0, NULL, PHAPP_ID_PROCESS_PRIORITY);
+            priorityMenuItem = PhFindEMenuItem(menuInfo->Menu, 0, NULL, PHAPP_ID_PROCESS_PRIORITYCLASS);
 
         if (priorityMenuItem)
             insertIndex = PhIndexOfEMenuItem(menuInfo->Menu, priorityMenuItem) + 1;

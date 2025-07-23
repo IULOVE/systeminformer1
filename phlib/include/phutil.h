@@ -848,6 +848,17 @@ PhFormatSize(
     PH_AUTO_T(PH_STRING, PhFormatSize((Size), (MaxSizeUnit)))
 
 PHLIBAPI
+BOOLEAN
+NTAPI
+PhFormatSizeToBuffer(
+    _In_ ULONG64 Size,
+    _In_ ULONG MaxSizeUnit,
+    _Out_writes_bytes_opt_(BufferLength) PWSTR Buffer,
+    _In_opt_ SIZE_T BufferLength,
+    _Out_opt_ PSIZE_T ReturnLength
+    );
+
+PHLIBAPI
 PPH_STRING
 NTAPI
 PhFormatGuid(
@@ -1190,7 +1201,7 @@ PhGetApplicationFileName(
 FORCEINLINE
 PPH_STRING
 PhGetApplicationFileNameZ(
-    _In_ PCPH_STRINGREF Suffix
+    _In_ PCWSTR AppendPath
     )
 {
     PPH_STRING fileName = NULL;
@@ -1198,7 +1209,10 @@ PhGetApplicationFileNameZ(
 
     if (applicationFileName = PhGetApplicationFileName())
     {
-        fileName = PhConcatStringRef2(&applicationFileName->sr, Suffix);
+        PH_STRINGREF string;
+
+        PhInitializeStringRef(&string, AppendPath);
+        fileName = PhConcatStringRef2(&applicationFileName->sr, &string);
         PhDereferenceObject(applicationFileName);
     }
 
@@ -1511,6 +1525,7 @@ NTAPI
 PhCreateProcessAsUser(
     _In_ PPH_CREATE_PROCESS_AS_USER_INFO Information,
     _In_ ULONG Flags,
+    _In_opt_ PVOID StartupInfo,
     _Out_opt_ PCLIENT_ID ClientId,
     _Out_opt_ PHANDLE ProcessHandle,
     _Out_opt_ PHANDLE ThreadHandle

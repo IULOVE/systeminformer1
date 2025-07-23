@@ -106,10 +106,7 @@ namespace CustomBuildTool
                 Share = FileShare.None
             };
 
-            using (FileStream file = new FileStream(FileName, options))
-            {
-                file.Close();
-            }
+            new FileStream(FileName, options).Dispose();
         }
 
         /// <summary>
@@ -123,13 +120,6 @@ namespace CustomBuildTool
 
             if (File.Exists(FileName))
                 File.Delete(FileName);
-        }
-
-        public static string CreateProcess(string FileName, string Arguments, bool FixNewLines = true, bool RedirectOutput = true)
-        {
-            CreateProcess(FileName, Arguments, out string outputstring, FixNewLines, RedirectOutput);
-
-            return outputstring;
         }
 
         /// <summary>
@@ -205,35 +195,21 @@ namespace CustomBuildTool
 
             if (File.Exists(DestinationFile))
             {
-                FileInfo sourceFile = new FileInfo(SourceFile);
-                FileInfo destinationFile = new FileInfo(DestinationFile);
+                GetFileTime(SourceFile, out var sourceCreationTime, out var sourceWriteTime);
+                GetFileTime(DestinationFile, out var destinationCreationTime, out var destinationWriteTime);
 
-                if (
-                    sourceFile.CreationTimeUtc > destinationFile.CreationTimeUtc ||
-                    sourceFile.LastWriteTimeUtc > destinationFile.LastWriteTimeUtc
-                    )
+                if (!(sourceCreationTime == destinationCreationTime && sourceWriteTime == destinationWriteTime))
                 {
                     File.Copy(SourceFile, DestinationFile, true);
-
-                    SetFileTime(
-                        DestinationFile,
-                        sourceFile.CreationTimeUtc,
-                        sourceFile.LastWriteTimeUtc
-                        );
+                    SetFileTime(DestinationFile, sourceCreationTime, sourceWriteTime);
                     updated = true;
                 }
             }
             else
             {
-                FileInfo sourceFile = new FileInfo(SourceFile);
-
+                GetFileTime(SourceFile, out var sourceCreationTime, out var sourceWriteTime);
                 File.Copy(SourceFile, DestinationFile, true);
-
-                SetFileTime(
-                    DestinationFile,
-                    sourceFile.CreationTimeUtc,
-                    sourceFile.LastWriteTimeUtc
-                    );
+                SetFileTime(DestinationFile, sourceCreationTime, sourceWriteTime);
                 updated = true;
             }
 
@@ -311,7 +287,16 @@ namespace CustomBuildTool
         {
             Value = Environment.GetEnvironmentVariable(Name, EnvironmentVariableTarget.Process);
 
-            return !string.IsNullOrWhiteSpace(Value);
+            if (string.IsNullOrWhiteSpace(Value))
+            {
+                if (Build.BuildToolsDebug)
+                {
+                    Program.PrintColorMessage($"EnvironmentVariable: {Name} not found.", ConsoleColor.Red);
+                }
+                return false;
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -323,10 +308,18 @@ namespace CustomBuildTool
         public static bool GetEnvironmentVariableSpan(string Name, out ReadOnlySpan<char> Value)
         {
             var value = Environment.GetEnvironmentVariable(Name, EnvironmentVariableTarget.Process);
-
             Value = value.AsSpan();
 
-            return !Utils.IsSpanNullOrWhiteSpace(Value);
+            if (Utils.IsSpanNullOrWhiteSpace(Value))
+            {
+                if (Build.BuildToolsDebug)
+                {
+                    Program.PrintColorMessage($"EnvironmentVariable: {Name} not found.", ConsoleColor.Red);
+                }
+                return false;
+            }
+
+            return true;
         }
 
         /// <summary>
