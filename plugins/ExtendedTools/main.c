@@ -12,14 +12,13 @@
 
 #include "exttools.h"
 #include "extension\plugin.h"
-
 #include <trace.h>
 
 PPH_PLUGIN PluginInstance = NULL;
 HWND ProcessTreeNewHandle = NULL;
 HWND NetworkTreeNewHandle = NULL;
-LIST_ENTRY EtProcessBlockListHead = { &EtProcessBlockListHead, &EtProcessBlockListHead };
-LIST_ENTRY EtNetworkBlockListHead = { &EtNetworkBlockListHead, &EtNetworkBlockListHead };
+RTL_STATIC_LIST_HEAD(EtProcessBlockListHead);
+RTL_STATIC_LIST_HEAD(EtNetworkBlockListHead);
 PH_CALLBACK_REGISTRATION PluginLoadCallbackRegistration;
 PH_CALLBACK_REGISTRATION PluginUnloadCallbackRegistration;
 PH_CALLBACK_REGISTRATION PluginShowOptionsCallbackRegistration;
@@ -46,15 +45,6 @@ PH_CALLBACK_REGISTRATION NetworkItemsUpdatedCallbackRegistration;
 PH_CALLBACK_REGISTRATION ProcessStatsEventCallbackRegistration;
 PH_CALLBACK_REGISTRATION SettingsUpdatedCallbackRegistration;
 
-EXTENDEDTOOLS_INTERFACE PluginInterface =
-{
-    EXTENDEDTOOLS_INTERFACE_VERSION,
-    EtLookupTotalGpuAdapterUtilization,
-    EtLookupTotalGpuAdapterDedicated,
-    EtLookupTotalGpuAdapterShared,
-    EtLookupTotalGpuAdapterEngineUtilization
-};
-
 ULONG EtWindowsVersion = WINDOWS_ANCIENT;
 BOOLEAN EtIsExecutingInWow64 = FALSE;
 BOOLEAN EtGpuFahrenheitEnabled = FALSE;
@@ -69,6 +59,15 @@ BOOLEAN EtEnableScaleGraph = FALSE;
 BOOLEAN EtEnableScaleText = FALSE;
 BOOLEAN EtPropagateCpuUsage = FALSE;
 BOOLEAN EtEnableAvxSupport = FALSE;
+
+EXTENDEDTOOLS_INTERFACE PluginInterface =
+{
+    EXTENDEDTOOLS_INTERFACE_VERSION,
+    EtLookupTotalGpuAdapterUtilization,
+    EtLookupTotalGpuAdapterDedicated,
+    EtLookupTotalGpuAdapterShared,
+    EtLookupTotalGpuAdapterEngineUtilization
+};
 
 _Function_class_(PH_CALLBACK_FUNCTION)
 VOID NTAPI LoadCallback(
@@ -192,7 +191,7 @@ VOID NTAPI MenuItemCallback(
         break;
     case ID_OBJMGR:
         {
-            EtShowObjectManagerDialog(menuItem->OwnerWindow);
+            //EtShowObjectManagerDialog(menuItem->OwnerWindow);
         }
         break;
     case ID_POOL_TABLE:
@@ -257,7 +256,7 @@ VOID NTAPI MainMenuInitializingCallback(
     }
 
     PhInsertEMenuItem(systemMenu, PhPluginCreateEMenuItem(PluginInstance, 0, ID_POOL_TABLE, L"Poo&l Table", NULL), ULONG_MAX);
-    PhInsertEMenuItem(systemMenu, PhPluginCreateEMenuItem(PluginInstance, 0, ID_OBJMGR, L"&Object Manager", NULL), ULONG_MAX);
+    //PhInsertEMenuItem(systemMenu, PhPluginCreateEMenuItem(PluginInstance, 0, ID_OBJMGR, L"&Object Manager", NULL), ULONG_MAX);
     PhInsertEMenuItem(systemMenu, PhPluginCreateEMenuItem(PluginInstance, 0, ID_SMBIOS, L"SM&BIOS", NULL), ULONG_MAX);
     PhInsertEMenuItem(systemMenu, bootMenuItem = PhPluginCreateEMenuItem(PluginInstance, 0, ID_FIRMWARE, L"Firm&ware Table", NULL), ULONG_MAX);
     PhInsertEMenuItem(systemMenu, tpmMenuItem = PhPluginCreateEMenuItem(PluginInstance, 0, ID_TPM, L"&Trusted Platform Module", NULL), ULONG_MAX);
@@ -300,10 +299,7 @@ VOID NTAPI ProcessesUpdatedCallback(
     _In_opt_ PVOID Context
     )
 {
-    if (ProcessesUpdatedCount != 3)
-    {
-        ProcessesUpdatedCount++;
-    }
+    ProcessesUpdatedCount = PtrToUlong(Parameter);
 }
 
 _Function_class_(PH_CALLBACK_FUNCTION)
@@ -327,8 +323,8 @@ VOID NTAPI HandlePropertiesInitializingCallback(
     _In_opt_ PVOID Context
     )
 {
-    if (Parameter)
-        EtHandlePropertiesInitializing(Parameter);
+    //if (Parameter)
+    //    EtHandlePropertiesInitializing(Parameter);
 }
 
 _Function_class_(PH_CALLBACK_FUNCTION)
@@ -337,8 +333,8 @@ VOID NTAPI HandlePropertiesWindowInitializedCallback(
     _In_opt_ PVOID Context
     )
 {
-    if (Parameter)
-        EtHandlePropertiesWindowInitialized(Parameter);
+    //if (Parameter)
+    //    EtHandlePropertiesWindowInitialized(Parameter);
 }
 
 _Function_class_(PH_CALLBACK_FUNCTION)
@@ -347,8 +343,8 @@ VOID NTAPI HandlePropertiesWindowUninitializingCallback(
     _In_opt_ PVOID Context
     )
 {
-    if (Parameter)
-        EtHandlePropertiesWindowUninitializing(Parameter);
+    //if (Parameter)
+    //    EtHandlePropertiesWindowUninitializing(Parameter);
 }
 
 _Function_class_(PH_CALLBACK_FUNCTION)

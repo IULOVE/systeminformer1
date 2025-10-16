@@ -40,16 +40,18 @@ VOID EtGpuSystemInformationInitializing(
     _In_ PPH_PLUGIN_SYSINFO_POINTERS Pointers
     )
 {
+    static CONST PH_STRINGREF string = PH_STRINGREF_INIT(L"GPU");
     PH_SYSINFO_SECTION section;
 
     memset(&section, 0, sizeof(PH_SYSINFO_SECTION));
-    PhInitializeStringRef(&section.Name, L"GPU");
+    section.Name = string;
     section.Flags = 0;
     section.Callback = EtpGpuSysInfoSectionCallback;
 
     GpuSection = Pointers->CreateSection(&section);
 }
 
+_Function_class_(PH_SYSINFO_SECTION_CALLBACK)
 BOOLEAN EtpGpuSysInfoSectionCallback(
     _In_ PPH_SYSINFO_SECTION Section,
     _In_ PH_SYSINFO_SECTION_MESSAGE Message,
@@ -364,7 +366,7 @@ INT_PTR CALLBACK EtpGpuDialogProc(
 
             GpuPanel = PhCreateDialog(PluginInstance->DllBase, MAKEINTRESOURCE(IDD_SYSINFO_GPUPANEL), hwndDlg, EtpGpuPanelDialogProc, NULL);
             ShowWindow(GpuPanel, SW_SHOW);
-            PhAddLayoutItemEx(&GpuLayoutManager, GpuPanel, NULL, PH_ANCHOR_LEFT | PH_ANCHOR_RIGHT | PH_ANCHOR_BOTTOM, panelItem->Margin);
+            PhAddLayoutItemEx(&GpuLayoutManager, GpuPanel, NULL, PH_ANCHOR_LEFT | PH_ANCHOR_RIGHT | PH_ANCHOR_BOTTOM, &panelItem->Margin);
 
             EtpCreateGpuGraphs();
             EtpUpdateGpuGraphs();
@@ -397,6 +399,8 @@ INT_PTR CALLBACK EtpGpuDialogProc(
                 SetWindowFont(GetDlgItem(hwndDlg, IDC_GPUNAME), GpuSection->Parameters->MediumFont, FALSE);
             }
 
+            PhLayoutManagerUpdate(&GpuLayoutManager, LOWORD(wParam));
+            PhLayoutManagerLayout(&GpuLayoutManager);
             EtpLayoutGpuGraphs(hwndDlg);
         }
         break;
@@ -620,8 +624,8 @@ VOID EtpLayoutGpuGraphs(
     PhGetSizeDpiValue(&marginRect, GpuDialogWindowDpi, TRUE);
     graphPadding = PhGetDpi(ET_GPU_PADDING, GpuDialogWindowDpi);
 
-    GetClientRect(GpuDialog, &clientRect);
-    GetClientRect(GetDlgItem(GpuDialog, IDC_GPU_L), &labelRect);
+    PhGetClientRect(GpuDialog, &clientRect);
+    PhGetClientRect(GetDlgItem(GpuDialog, IDC_GPU_L), &labelRect);
     graphWidth = clientRect.right - marginRect.left - marginRect.right;
 
     if (EtGpuSupported)
@@ -862,12 +866,19 @@ VOID EtpNotifyGpuGraph(
                 {
                     FLOAT max = 0;
 
-                    for (ULONG i = 0; i < drawInfo->LineDataCount; i++)
+                    if (EtEnableAvxSupport && drawInfo->LineDataCount > 128)
                     {
-                        FLOAT data = GpuGraphState.Data1[i]; // HACK
+                        max = PhMaxMemorySingles(GpuGraphState.Data1, drawInfo->LineDataCount);
+                    }
+                    else
+                    {
+                        for (ULONG i = 0; i < drawInfo->LineDataCount; i++)
+                        {
+                            FLOAT data = GpuGraphState.Data1[i];
 
-                        if (max < data)
-                            max = data;
+                            if (max < data)
+                                max = data;
+                        }
                     }
 
                     if (max != 0)

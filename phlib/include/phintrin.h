@@ -15,6 +15,10 @@
 
 #include <intrin.h>
 
+#if defined(_M_ARM64) && defined(__clang__)
+#include <arm_acle.h>
+#endif
+
 #ifdef _ARM64_
 #define PhHasIntrinsics TRUE
 #define PhHasPopulationCount TRUE
@@ -223,6 +227,19 @@ PhSetINT128by32(
 {
 #ifdef _ARM64_
     return vdupq_n_s32(Value);
+#else
+    return _mm_set1_epi32(Value);
+#endif
+}
+
+FORCEINLINE
+PH_INT128
+PhSetUINT128by32(
+    _In_ ULONG Value
+    )
+{
+#ifdef _ARM64_
+    return vdupq_n_u32(Value);
 #else
     return _mm_set1_epi32(Value);
 #endif

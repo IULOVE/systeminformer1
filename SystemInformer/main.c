@@ -80,8 +80,6 @@ INT WINAPI wWinMain(
 
     PhInitializePreviousInstance();
 
-    PhInitializeSuperclassControls();
-
     if (PhEnableKsiSupport &&
         !PhStartupParameters.ShowOptions)
     {
@@ -98,11 +96,8 @@ INT WINAPI wWinMain(
 
     PhInitializeAutoPool(&BaseAutoPool);
 
+    PhInitializeSuperclassControls();
     PhInitializeCommonControls();
-    PhTreeNewInitialization();
-    PhGraphControlInitialization();
-    PhHexEditInitialization();
-    PhColorBoxInitialization();
 
     PhInitializeAppSystem();
     PhInitializeCallbacks();
@@ -333,6 +328,7 @@ typedef struct _PHP_PREVIOUS_MAIN_WINDOW_CONTEXT
     PPH_STRING WindowName;
 } PHP_PREVIOUS_MAIN_WINDOW_CONTEXT, *PPHP_PREVIOUS_MAIN_WINDOW_CONTEXT;
 
+_Function_class_(PH_WINDOW_ENUM_CALLBACK)
 static BOOLEAN CALLBACK PhPreviousInstanceWindowEnumProc(
     _In_ HWND WindowHandle,
     _In_ PVOID Context
@@ -391,17 +387,22 @@ static VOID PhForegroundPreviousInstance(
     HANDLE processHandle = NULL;
     HANDLE tokenHandle = NULL;
     PH_TOKEN_USER tokenUser;
+    ULONG sessionId = 0;
     ULONG attempts = 0;
 
     PhTraceFuncEnter("Foreground previous instance: %lu", HandleToUlong(ProcessId));
 
     memset(&context, 0, sizeof(PHP_PREVIOUS_MAIN_WINDOW_CONTEXT));
     context.ProcessId = ProcessId;
-    context.WindowName = PhGetStringSetting(L"MainWindowClassName");
+    context.WindowName = PhGetStringSetting(SETTING_MAIN_WINDOW_CLASS_NAME);
 
     if (PhIsNullOrEmptyString(context.WindowName))
         goto CleanupExit;
     if (!NT_SUCCESS(PhOpenProcess(&processHandle, PROCESS_QUERY_LIMITED_INFORMATION, ProcessId)))
+        goto CleanupExit;
+    if (!NT_SUCCESS(PhGetProcessSessionId(processHandle, &sessionId)))
+        goto CleanupExit;
+    if (NtCurrentPeb()->SessionId != sessionId)
         goto CleanupExit;
     if (!NT_SUCCESS(PhOpenProcessToken(processHandle, TOKEN_QUERY, &tokenHandle)))
         goto CleanupExit;
@@ -414,8 +415,8 @@ static VOID PhForegroundPreviousInstance(
     do
     {
         PhEnumWindows(PhPreviousInstanceWindowEnumProc, &context);
-        PhDelayExecution(100);
-    } while (++attempts < 50);
+        PhDelayExecution(500);
+    } while (++attempts < 10);
 
 CleanupExit:
 
@@ -442,7 +443,7 @@ VOID PhInitializePreviousInstance(
     VOID
     )
 {
-    if (PhGetIntegerSetting(L"AllowOnlyOneInstance") &&
+    if (PhGetIntegerSetting(SETTING_ALLOW_ONLY_ONE_INSTANCE) &&
         !PhStartupParameters.NewInstance &&
         !PhStartupParameters.ShowOptions &&
         !PhStartupParameters.PhSvc &&
@@ -452,14 +453,14 @@ VOID PhInitializePreviousInstance(
         PhActivatePreviousInstance();
     }
 
-    if (PhGetIntegerSetting(L"EnableStartAsAdmin") &&
+    if (PhGetIntegerSetting(SETTING_ENABLE_START_AS_ADMIN) &&
         !PhStartupParameters.NewInstance &&
         !PhStartupParameters.ShowOptions &&
         !PhStartupParameters.PhSvc)
     {
         if (PhGetOwnTokenAttributes().Elevated)
         {
-            if (PhGetIntegerSetting(L"EnableStartAsAdminAlwaysOnTop"))
+            if (PhGetIntegerSetting(SETTING_ENABLE_START_AS_ADMIN_ALWAYS_ON_TOP))
             {
                 if (NT_SUCCESS(PhRunAsAdminTaskUIAccess()))
                 {
@@ -479,58 +480,50 @@ VOID PhInitializePreviousInstance(
     }
 }
 
-BOOLEAN NTAPI PhpPreviousInstancesCallback(
+_Function_class_(PH_ENUM_DIRECTORY_OBJECTS)
+NTSTATUS NTAPI PhpPreviousInstancesCallback(
     _In_ HANDLE RootDirectory,
     _In_ PPH_STRINGREF Name,
     _In_ PPH_STRINGREF TypeName,
     _In_ PVOID Context
     )
 {
-    static CONST PH_STRINGREF objectNameSr = PH_STRINGREF_INIT(L"SiMutant_");
-    HANDLE objectHandle;
-    UNICODE_STRING objectName;
-    OBJECT_ATTRIBUTES objectAttributes;
     MUTANT_OWNER_INFORMATION objectInfo;
+    HANDLE objectHandle;
 
-    if (!PhStartsWithStringRef(Name, &objectNameSr, FALSE))
-        return TRUE;
-    if (!PhStringRefToUnicodeString(Name, &objectName))
-        return TRUE;
+    if (!PhStartsWithStringRef2(Name, L"SiMutant_", FALSE))
+        return STATUS_NAME_TOO_LONG;
 
-    InitializeObjectAttributes(
-        &objectAttributes,
-        &objectName,
-        OBJ_CASE_INSENSITIVE,
-        RootDirectory,
-        NULL
-        );
-
-    if (!NT_SUCCESS(NtOpenMutant(
+    if (NT_SUCCESS(PhOpenMutant(
         &objectHandle,
         MUTANT_QUERY_STATE,
-        &objectAttributes
+        RootDirectory,
+        Name
         )))
     {
-        return TRUE;
+        if (NT_SUCCESS(PhGetMutantOwnerInformation(
+            objectHandle,
+            &objectInfo
+            )))
+        {
+            if (objectInfo.ClientId.UniqueProcess != NtCurrentProcessId())
+            {
+                PhForegroundPreviousInstance(objectInfo.ClientId.UniqueProcess);
+                return STATUS_NO_MORE_ENTRIES;
+            }
+        }
+
+        NtClose(objectHandle);
     }
 
-    if (NT_SUCCESS(PhGetMutantOwnerInformation(
-        objectHandle,
-        &objectInfo
-        )))
-    {
-        if (objectInfo.ClientId.UniqueProcess != NtCurrentProcessId())
-            PhForegroundPreviousInstance(objectInfo.ClientId.UniqueProcess);
-    }
-
-    return TRUE;
+    return STATUS_SUCCESS;
 }
 
 VOID PhActivatePreviousInstance(
     VOID
     )
 {
-    NTSTATUS status = STATUS_UNSUCCESSFUL;
+    NTSTATUS status;
     //HANDLE fileHandle;
     //PPH_STRING applicationFileName;
 
@@ -607,6 +600,11 @@ VOID PhInitializeCommonControls(
         ;
 
     InitCommonControlsEx(&icex);
+
+    PhTreeNewInitialization();
+    PhGraphControlInitialization();
+    PhHexEditInitialization();
+    PhColorBoxInitialization();
 }
 
 NTSTATUS PhInitializeDirectoryPolicy(
@@ -742,13 +740,13 @@ VOID PhpCreateUnhandledExceptionCrashDump(
     PhDereferenceObject(directory);
 }
 
-ULONG CALLBACK PhpUnhandledExceptionCallback(
+LONG CALLBACK PhpUnhandledExceptionCallback(
     _In_ PEXCEPTION_POINTERS ExceptionInfo
     )
 {
     PPH_STRING errorMessage;
     PPH_STRING message;
-    INT result;
+    LONG result;
 
     // Let the debugger handle the exception. (dmex)
     if (PhIsDebuggerPresent())
@@ -757,7 +755,7 @@ ULONG CALLBACK PhpUnhandledExceptionCallback(
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
-    if (PhIsInteractiveUserSession())
+    if (NT_SUCCESS(PhIsInteractiveUserSession()))
     {
         TASKDIALOGCONFIG config = { sizeof(TASKDIALOGCONFIG) };
         TASKDIALOG_BUTTON buttons[6] =
@@ -1081,7 +1079,7 @@ VOID PhEnableTerminationPolicy(
     _In_ BOOLEAN Enabled
     )
 {
-    if (PhGetOwnTokenAttributes().Elevated && PhGetIntegerSetting(L"EnableBreakOnTermination"))
+    if (PhGetOwnTokenAttributes().Elevated && PhGetIntegerSetting(SETTING_ENABLE_BREAK_ON_TERMINATION))
     {
         NTSTATUS status;
 
@@ -1241,33 +1239,34 @@ VOID PhInitializeAppSettings(
     PhUpdateCachedSettings();
 
     // Apply basic global settings.
-    PhPluginsEnabled = !!PhGetIntegerSetting(L"EnablePlugins");
-    PhMaxSizeUnit = PhGetIntegerSetting(L"MaxSizeUnit");
-    PhMaxPrecisionUnit = (USHORT)PhGetIntegerSetting(L"MaxPrecisionUnit");
+    PhPluginsEnabled = !!PhGetIntegerSetting(SETTING_ENABLE_PLUGINS);
+    PhMaxSizeUnit = PhGetIntegerSetting(SETTING_MAX_SIZE_UNIT);
+    PhMaxPrecisionUnit = (USHORT)PhGetIntegerSetting(SETTING_MAX_PRECISION_UNIT);
     PhMaxPrecisionLimit = 1.0f;
     for (ULONG i = 0; i < PhMaxPrecisionUnit; i++)
         PhMaxPrecisionLimit /= 10;
-    PhEnableWindowText = !!PhGetIntegerSetting(L"EnableWindowText");
-    PhEnableThemeSupport = !!PhGetIntegerSetting(L"EnableThemeSupport");
-    PhThemeWindowForegroundColor = PhGetIntegerSetting(L"ThemeWindowForegroundColor");
-    PhThemeWindowBackgroundColor = PhGetIntegerSetting(L"ThemeWindowBackgroundColor");
-    PhThemeWindowBackground2Color = PhGetIntegerSetting(L"ThemeWindowBackground2Color");
-    PhThemeWindowHighlightColor = PhGetIntegerSetting(L"ThemeWindowHighlightColor");
-    PhThemeWindowHighlight2Color = PhGetIntegerSetting(L"ThemeWindowHighlight2Color");
-    PhThemeWindowTextColor = PhGetIntegerSetting(L"ThemeWindowTextColor");
-    PhEnableThemeAcrylicSupport = WindowsVersion >= WINDOWS_11 && !!PhGetIntegerSetting(L"EnableThemeAcrylicSupport");
-    PhEnableThemeAcrylicWindowSupport = WindowsVersion >= WINDOWS_11 && !!PhGetIntegerSetting(L"EnableThemeAcrylicWindowSupport");
-    PhEnableThemeNativeButtons = !!PhGetIntegerSetting(L"EnableThemeNativeButtons");
-    PhEnableThemeListviewBorder = !!PhGetIntegerSetting(L"TreeListBorderEnable");
-    PhEnableDeferredLayout = !!PhGetIntegerSetting(L"EnableDeferredLayout");
-    PhEnableServiceNonPoll = !!PhGetIntegerSetting(L"EnableServiceNonPoll");
-    PhEnableServiceNonPollNotify = !!PhGetIntegerSetting(L"EnableServiceNonPollNotify");
-    PhServiceNonPollFlushInterval = PhGetIntegerSetting(L"NonPollFlushInterval");
-    PhEnableKsiSupport = !!PhGetIntegerSetting(L"KsiEnable") && !PhStartupParameters.NoKph && !PhIsExecutingInWow64();
-    PhEnableKsiWarnings = !!PhGetIntegerSetting(L"KsiEnableWarnings");
-    PhFontQuality = PhGetFontQualitySetting(PhGetIntegerSetting(L"FontQuality"));
+    PhEnableWindowText = !!PhGetIntegerSetting(SETTING_ENABLE_WINDOW_TEXT);
 
-    if (PhGetIntegerSetting(L"SampleCountAutomatic"))
+    PhEnableThemeSupport = !!PhGetIntegerSetting(SETTING_ENABLE_THEME_SUPPORT);
+    PhThemeWindowForegroundColor = PhGetIntegerSetting(SETTING_THEME_WINDOW_FOREGROUND_COLOR);
+    PhThemeWindowBackgroundColor = PhGetIntegerSetting(SETTING_THEME_WINDOW_BACKGROUND_COLOR);
+    PhThemeWindowBackground2Color = PhGetIntegerSetting(SETTING_THEME_WINDOW_BACKGROUND2_COLOR);
+    PhThemeWindowHighlightColor = PhGetIntegerSetting(SETTING_THEME_WINDOW_HIGHLIGHT_COLOR);
+    PhThemeWindowHighlight2Color = PhGetIntegerSetting(SETTING_THEME_WINDOW_HIGHLIGHT2_COLOR);
+    PhThemeWindowTextColor = PhGetIntegerSetting(SETTING_THEME_WINDOW_TEXT_COLOR);
+    PhEnableThemeAcrylicSupport = WindowsVersion >= WINDOWS_11 && !!PhGetIntegerSetting(SETTING_ENABLE_THEME_ACRYLIC_SUPPORT);
+    PhEnableThemeAcrylicWindowSupport = WindowsVersion >= WINDOWS_11 && !!PhGetIntegerSetting(SETTING_ENABLE_THEME_ACRYLIC_WINDOW_SUPPORT);
+    PhEnableThemeNativeButtons = !!PhGetIntegerSetting(SETTING_ENABLE_THEME_NATIVE_BUTTONS);
+    PhEnableThemeListviewBorder = !!PhGetIntegerSetting(SETTING_TREE_LIST_BORDER_ENABLE);
+    PhEnableDeferredLayout = !!PhGetIntegerSetting(SETTING_ENABLE_DEFERRED_LAYOUT);
+    PhEnableServiceNonPoll = !!PhGetIntegerSetting(SETTING_ENABLE_SERVICE_NON_POLL);
+    PhEnableServiceNonPollNotify = !!PhGetIntegerSetting(SETTING_ENABLE_SERVICE_NON_POLL_NOTIFY);
+    PhServiceNonPollFlushInterval = PhGetIntegerSetting(SETTING_NON_POLL_FLUSH_INTERVAL);
+    PhEnableKsiSupport = !!PhGetIntegerSetting(SETTING_KSI_ENABLE) && !PhStartupParameters.NoKph && !PhIsExecutingInWow64();
+    PhEnableKsiWarnings = !!PhGetIntegerSetting(SETTING_KSI_ENABLE_WARNINGS);
+    PhFontQuality = PhGetFontQualitySetting(PhGetIntegerSetting(SETTING_FONT_QUALITY));
+
+    if (PhGetIntegerSetting(SETTING_SAMPLE_COUNT_AUTOMATIC))
     {
         ULONG sampleCount;
 
@@ -1276,12 +1275,12 @@ VOID PhInitializeAppSettings(
         if (sampleCount > 4096)
             sampleCount = 4096;
 
-        PhSetIntegerSetting(L"SampleCount", sampleCount);
+        PhSetIntegerSetting(SETTING_SAMPLE_COUNT, sampleCount);
     }
 
     if (PhStartupParameters.UpdateChannel != PhInvalidChannel)
     {
-        PhSetIntegerSetting(L"ReleaseChannel", PhStartupParameters.UpdateChannel);
+        PhSetIntegerSetting(SETTING_RELEASE_CHANNEL, PhStartupParameters.UpdateChannel);
     }
 
     if (PhStartupParameters.ShowHidden && !PhNfIconsEnabled())
@@ -1290,7 +1289,7 @@ VOID PhInitializeAppSettings(
         // old behavior for automation workflows. If the user specified "-hide" then they want to
         // start the program hidden to the system tray and not show any main window. If there are no
         // system tray icons enabled then we need to enable them so the behavior is consistent.
-        PhSetStringSetting(L"IconSettings", L"2|1");
+        PhSetStringSetting(SETTING_ICON_SETTINGS, L"2|1");
     }
 }
 
@@ -1323,8 +1322,9 @@ typedef enum _PH_COMMAND_ARG
     PH_ARG_CHANNEL,
 } PH_COMMAND_ARG;
 
+_Function_class_(PH_COMMAND_LINE_CALLBACK)
 BOOLEAN NTAPI PhpCommandLineOptionCallback(
-    _In_opt_ PPH_COMMAND_LINE_OPTION Option,
+    _In_opt_ PCPH_COMMAND_LINE_OPTION Option,
     _In_opt_ PPH_STRING Value,
     _In_opt_ PVOID Context
     )
@@ -1472,7 +1472,7 @@ VOID PhpProcessStartupParameters(
     VOID
     )
 {
-    PH_COMMAND_LINE_OPTION options[] =
+    CONST PH_COMMAND_LINE_OPTION options[] =
     {
         { PH_ARG_SETTINGS, L"settings", MandatoryArgumentType },
         { PH_ARG_NOSETTINGS, L"nosettings", NoArgumentType },

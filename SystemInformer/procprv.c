@@ -116,7 +116,7 @@ typedef struct _PH_PROCESS_QUERY_S2_DATA
 
 typedef struct _PH_SID_FULL_NAME_CACHE_ENTRY
 {
-    PSID Sid;
+    PCSID Sid;
     PPH_STRING FullName;
 } PH_SID_FULL_NAME_CACHE_ENTRY, *PPH_SID_FULL_NAME_CACHE_ENTRY;
 
@@ -232,69 +232,6 @@ PH_CIRCULAR_BUFFER_ULONG64 PhMaxIoWriteHistory;
 
 static PPH_HASHTABLE PhpSidFullNameCacheHashtable = NULL;
 
-static PPH_STRING PhpProtectionUnknownString = NULL;
-static PPH_STRING PhpProtectionYesString = NULL;
-static PPH_STRING PhpProtectionNoneString = NULL;
-static PPH_STRING PhpProtectionSecureIUMString = NULL;
-
-static CONST PH_KEY_VALUE_PAIR PhProtectedTypeStrings[] =
-{
-    SIP(L"None", PsProtectedTypeNone),
-    SIP(L"Light", PsProtectedTypeProtectedLight),
-    SIP(L"Full", PsProtectedTypeProtected),
-};
-
-static CONST PH_KEY_VALUE_PAIR PhProtectedSignerStrings[] =
-{
-    SIP(L"Authenticode", PsProtectedSignerAuthenticode),
-    SIP(L"CodeGen", PsProtectedSignerCodeGen),
-    SIP(L"Antimalware", PsProtectedSignerAntimalware),
-    SIP(L"Lsa", PsProtectedSignerLsa),
-    SIP(L"Windows", PsProtectedSignerWindows),
-    SIP(L"WinTcb", PsProtectedSignerWinTcb),
-    SIP(L"WinSystem", PsProtectedSignerWinSystem),
-    SIP(L"StoreApp", PsProtectedSignerApp),
-};
-
-PPH_STRING PhpGetProtectionString(
-    _In_ PS_PROTECTION Protection,
-    _In_ BOOLEAN IsSecureProcess
-    )
-{
-    PH_FORMAT format[5];
-    ULONG count = 0;
-    PWSTR type = L"Unknown";
-    PWSTR signer = L"";
-
-    if (Protection.Level == 0)
-    {
-        if (IsSecureProcess)
-            return PhReferenceObject(PhpProtectionSecureIUMString);
-        else
-            return PhReferenceObject(PhpProtectionNoneString);
-    }
-
-    PhFindStringSiKeyValuePairs(PhProtectedTypeStrings, sizeof(PhProtectedTypeStrings), Protection.Type, &type);
-    PhFindStringSiKeyValuePairs(PhProtectedSignerStrings, sizeof(PhProtectedSignerStrings), Protection.Signer, &signer);
-
-    if (IsSecureProcess)
-        PhInitFormatS(&format[count++], L"Secure ");
-    PhInitFormatS(&format[count++], type);
-
-    if (signer[0] != UNICODE_NULL)
-    {
-        PhInitFormatS(&format[count++], L" (");
-        PhInitFormatS(&format[count++], signer);
-        PhInitFormatS(&format[count++], Protection.Audit ? L", Audit)" : L")");
-    }
-    else if (Protection.Audit)
-    {
-        PhInitFormatS(&format[count++], L" (Audit)");
-    }
-
-    return PhFormat(format, count, 10);
-}
-
 BOOLEAN PhProcessProviderInitialization(
     VOID
     )
@@ -359,11 +296,6 @@ BOOLEAN PhProcessProviderInitialization(
     PhCpusKernelHistory = historyBuffer;
     PhCpusUserHistory = PhCpusKernelHistory + PhSystemProcessorInformation.NumberOfProcessors;
 
-    PhpProtectionUnknownString = PhCreateString(L"Unknown");
-    PhpProtectionYesString = PhCreateString(L"Yes");
-    PhpProtectionNoneString = PhCreateString(L"None");
-    PhpProtectionSecureIUMString = PhCreateString(L"Secure (IUM)");
-
     return TRUE;
 }
 
@@ -427,15 +359,19 @@ PPH_PROCESS_ITEM PhCreateProcessItem(
     PhInitializeCircularBuffer_SIZE_T(&processItem->PrivateBytesHistory, PhStatisticsSampleCount);
     //PhInitializeCircularBuffer_SIZE_T(&processItem->WorkingSetHistory, PhStatisticsSampleCount);
 
-    PhEmCallObjectOperation(EmProcessItemType, processItem, EmObjectCreate);
-
     //
-    // Initialize ImageCoherencyStatus to STATUS_PENDING this notes that the
-    // image coherency hasn't been done yet. This prevents the process items
-    // from being noted as "Low Image Coherency" or being highlighted until
-    // the analysis runs. See: PhpShouldShowImageCoherency
+    // Initialize ImageCoherencyStatus to STATUS_PENDING and prevent items
+    // from being noted as "Low Image Coherency" or highlighted until the
+    // analysis runs. See: PhpShouldShowImageCoherency (jxy-s)
     //
     processItem->ImageCoherencyStatus = STATUS_PENDING;
+
+    //
+    // Notify object operations of object creation. Note: This must be the last
+    // call after all other methods, otherwise extensions that rely on the
+    // object being initialized might crash or have undefined behavior. (dmex)
+    //
+    PhEmCallObjectOperation(EmProcessItemType, processItem, EmObjectCreate);
 
     return processItem;
 }
@@ -476,7 +412,6 @@ VOID PhpProcessItemDeleteProcedure(
     if (processItem->CommandLine) PhDereferenceObject(processItem->CommandLine);
     PhDeleteImageVersionInfo(&processItem->VersionInfo);
     if (processItem->Sid) PhFree(processItem->Sid);
-    if (processItem->ProtectionString) PhDereferenceObject(processItem->ProtectionString);
     if (processItem->VerifySignerName) PhDereferenceObject(processItem->VerifySignerName);
     if (processItem->PackageFullName) PhDereferenceObject(processItem->PackageFullName);
     if (processItem->UserName) PhDereferenceObject(processItem->UserName);
@@ -648,7 +583,8 @@ VOID PhpRemoveProcessItem(
     PhDereferenceObject(ProcessItem);
 }
 
-BOOLEAN PhpSidFullNameCacheHashtableEqualFunction(
+_Function_class_(PH_HASHTABLE_EQUAL_FUNCTION)
+static BOOLEAN PhpSidFullNameCacheHashtableEqualFunction(
     _In_ PVOID Entry1,
     _In_ PVOID Entry2
     )
@@ -659,13 +595,14 @@ BOOLEAN PhpSidFullNameCacheHashtableEqualFunction(
     return PhEqualSid(entry1->Sid, entry2->Sid);
 }
 
-ULONG PhpSidFullNameCacheHashtableHashFunction(
+_Function_class_(PH_HASHTABLE_HASH_FUNCTION)
+static ULONG PhpSidFullNameCacheHashtableHashFunction(
     _In_ PVOID Entry
     )
 {
     PPH_SID_FULL_NAME_CACHE_ENTRY entry = Entry;
 
-    return PhHashBytes(entry->Sid, PhLengthSid(entry->Sid));
+    return PhHashBytes((PUCHAR)entry->Sid, PhLengthSid(entry->Sid));
 }
 
 PPH_STRING PhpGetSidFullNameCachedSlow(
@@ -710,7 +647,7 @@ PPH_STRING PhpGetSidFullNameCachedSlow(
 }
 
 PPH_STRING PhpGetSidFullNameCached(
-    _In_ PSID Sid
+    _In_ PCSID Sid
     )
 {
     if (PhpSidFullNameCacheHashtable)
@@ -742,7 +679,7 @@ VOID PhpFlushSidFullNameCache(
 
     while (entry = PhNextEnumHashtable(&enumContext))
     {
-        PhFree(entry->Sid);
+        PhFree((PVOID)entry->Sid);
         PhDereferenceObject(entry->FullName);
     }
 
@@ -1414,9 +1351,9 @@ VOID PhpFillProcessItem(
             ProcessItem->ProcessId == SYSTEM_PROCESS_ID)
         {
             if (!ProcessItem->Sid)
-                ProcessItem->Sid = PhAllocateCopy((PSID)&PhSeLocalSystemSid, PhLengthSid((PSID)&PhSeLocalSystemSid));
+                ProcessItem->Sid = PhAllocateCopy((PSID)&PhSeLocalSystemSid, PhLengthSid(&PhSeLocalSystemSid));
             if (!ProcessItem->UserName)
-                ProcessItem->UserName = PhpGetSidFullNameCached((PSID)&PhSeLocalSystemSid);
+                ProcessItem->UserName = PhpGetSidFullNameCached(&PhSeLocalSystemSid);
 
             ProcessItem->IsSystemProcess = TRUE;
         }
@@ -1482,32 +1419,25 @@ VOID PhpFillProcessItem(
 
     // Protection
     {
-        BOOLEAN haveProtection = FALSE;
-
-        if (ProcessItem->QueryHandle)
+        if (WindowsVersion >= WINDOWS_8_1)
         {
-            if (WindowsVersion >= WINDOWS_8_1)
+            if (ProcessItem->QueryHandle)
             {
                 PS_PROTECTION protection;
 
                 if (NT_SUCCESS(PhGetProcessProtection(ProcessItem->QueryHandle, &protection)))
                 {
                     ProcessItem->Protection.Level = protection.Level;
-                    haveProtection = TRUE;
                 }
             }
-        }
-
-        if (WindowsVersion >= WINDOWS_8_1)
-        {
-            if (haveProtection)
-                ProcessItem->ProtectionString = PhpGetProtectionString(ProcessItem->Protection, (BOOLEAN)ProcessItem->IsSecureProcess);
             else
-                ProcessItem->ProtectionString = PhReferenceObject(PhpProtectionUnknownString);
-        }
-        else if (ProcessItem->IsProtectedProcess)
-        {
-            ProcessItem->ProtectionString = PhReferenceObject(PhpProtectionYesString);
+            {
+                if (ProcessItem->ProcessId == SYSTEM_IDLE_PROCESS_ID || ProcessItem->ProcessId == INTERRUPTS_PROCESS_ID || ProcessItem->ProcessId == DPCS_PROCESS_ID)
+                {
+                    ProcessItem->Protection.Level = PsProtectedValue(PsProtectedSignerWinSystem, FALSE, PsProtectedTypeProtected);
+                    ProcessItem->IsProtectedProcess = ProcessItem->IsSecureProcess = ProcessItem->IsSystemProcess = TRUE;
+                }
+            }
         }
     }
 
@@ -2222,6 +2152,83 @@ VOID PhpGetProcessThreadInformation(
         *ContextSwitches = contextSwitches;
     if (ProcessorQueueLength)
         *ProcessorQueueLength = processorQueueLength;
+}
+
+/**
+ * Computes CPU utilization percentage from processor cycles during a measurement interval, normalized by a scaling factor using the number of logical processors.
+ *
+ * Cycles = ProcessorCycleCounterStop - ProcessorCycleCounterStart
+ * Cycles per Tick = Cycles /PerformanceCounterTickDelta
+ * Normalized Cycles per Tick = (Cycles / PerformanceCounterTickDelta) / LogicalProcessorCount
+ * CPU Usage % = DeltaCycles / (DeltaTicks × LogicalProcessorCount) × 100
+ * 
+ * \param ProcessorCycleCountStart The number of CPU cycles at the start of the measurement interval.
+ * \param ProcessorCycleCountStop The number of CPU cycles at the end of the measurement interval. Must be greater than ProcessorCycleCounterStart for a valid calculation.
+ * \param PerformanceCounterDelta The elapsed ticks from a high‑resolution performance counter (e.g., QueryPerformanceCounter) during the measurement interval, in performance counter ticks.
+ * \param NumberOfProcessors The number of logical processors in the system, used to normalize the usage percentage.
+ * \return The utilization percentage of processor cycles during the interval.
+ * \remarks This method is used by Windows Task Manager to estimate CPU usage from TSC deltas.
+ */
+DOUBLE PhComputeCpuUtilizationPercentFromCycles(
+    _In_ ULONGLONG ProcessorCycleCounterStart,
+    _In_ ULONGLONG ProcessorCycleCounterStop,
+    _In_ LONGLONG PerformanceCounterDelta,
+    _In_ ULONG LogicalProcessorCount
+    )
+{
+    if (ProcessorCycleCounterStop <= ProcessorCycleCounterStart ||
+        PerformanceCounterDelta == 0 || LogicalProcessorCount == 0)
+        return 0.0;
+
+    const DOUBLE DeltaCycles = (DOUBLE)(ProcessorCycleCounterStop - ProcessorCycleCounterStart);
+    const DOUBLE DeltaTicks = (DOUBLE)PerformanceCounterDelta;
+
+    const DOUBLE CyclesPerQpcTick = DeltaCycles / DeltaTicks;
+    const DOUBLE UtilizationPercent = (CyclesPerQpcTick / (DOUBLE)LogicalProcessorCount) * 100.0;
+
+    return UtilizationPercent;
+}
+
+/*
+ * Computes CPU utilization percentage from processor cycles during a measurement interval, normalized by logical processors and calibrated by counter frequencies.
+ *
+ * Utilization% = ObservedCycles / (ElapsedSeconds * CycleCounterFrequencyHz * LogicalProcessorCount) * 100
+ *
+ * \param ProcessorCycleCountStart The number of CPU cycles at the start of the measurement interval.
+ * \param ProcessorCycleCountStop The number of CPU cycles at the end of the measurement interval. Must be greater than ProcessorCycleCounterStart for a valid calculation.
+ * \param PerformanceCounterDelta The elapsed ticks from a high‑resolution performance counter (e.g., QueryPerformanceCounter) during the measurement interval, in performance counter ticks.
+ * \param NumberOfProcessors The number of logical processors in the system, used to normalize the usage percentage.
+ * \return The precise utilization percentage of processor cycles during the interval.
+ * \remarks This method produces a true CPU utilization percentage by incorporating counter frequencies.
+ * \remarks ProcessorCycleCounterFrequency must correspond to the SAME source as ProcessorCycleCounterStart/Stop.
+ * If cycles are from TSC, pass TSC frequency. If cycles are from a PMU (e.g., Unhalted Core Cycles), pass that
+ * counter's effective frequency at 100%, not the invariant TSC frequency.
+ */
+DOUBLE PhComputeCpuUtilizationPercentFromCyclesPrecise(
+    _In_ ULONGLONG ProcessorCycleCounterStart,
+    _In_ ULONGLONG ProcessorCycleCounterStop,
+    _In_ ULONGLONG ProcessorCycleCounterFrequency,
+    _In_ LONGLONG  PerformanceCounterDelta,
+    _In_ ULONGLONG PerformanceCounterFrequency,
+    _In_ ULONG LogicalProcessorCount
+    )
+{
+    if (ProcessorCycleCounterStop <= ProcessorCycleCounterStart || PerformanceCounterDelta <= 0 ||
+        PerformanceCounterFrequency == 0 || ProcessorCycleCounterFrequency == 0 || LogicalProcessorCount == 0)
+    {
+        return 0.0;
+    }
+
+    const DOUBLE ObservedCycles = (DOUBLE)(ProcessorCycleCounterStop - ProcessorCycleCounterStart);
+    const DOUBLE ElapsedSeconds = (DOUBLE)PerformanceCounterDelta / (DOUBLE)PerformanceCounterFrequency;
+    const DOUBLE CapacityCycles = ElapsedSeconds * (DOUBLE)ProcessorCycleCounterFrequency * (DOUBLE)LogicalProcessorCount;
+
+    if (!(CapacityCycles > 0.0))
+        return 0.0;
+
+    const DOUBLE UtilizationPercent = (ObservedCycles / CapacityCycles) * 100.0;
+
+    return UtilizationPercent;
 }
 
 #ifdef _ARM64_
@@ -2994,6 +3001,14 @@ VOID PhProcessProviderUpdate(
                                 }
 
                                 modified = TRUE;
+                            }
+                            else
+                            {
+                                if (processItem->Sid && PhIsNullOrEmptyString(processItem->UserName))
+                                {
+                                    PhMoveReference(&processItem->UserName, PhpGetSidFullNameCachedSlow(processItem->Sid));
+                                    modified = TRUE;
+                                }
                             }
                         }
                     }
@@ -4019,6 +4034,7 @@ VOID PhProcessImageListInitialization(
     PhReleaseQueuedLockExclusive(&PhImageListCacheHashtableLock);
 }
 
+_Function_class_(PH_HASHTABLE_EQUAL_FUNCTION)
 BOOLEAN PhImageListCacheHashtableEqualFunction(
     _In_ PVOID Entry1,
     _In_ PVOID Entry2
@@ -4030,6 +4046,7 @@ BOOLEAN PhImageListCacheHashtableEqualFunction(
     return PhEqualStringRef(&entry1->FileName->sr, &entry2->FileName->sr, FALSE);
 }
 
+_Function_class_(PH_HASHTABLE_HASH_FUNCTION)
 ULONG PhImageListCacheHashtableHashFunction(
     _In_ PVOID Entry
     )
@@ -4188,7 +4205,7 @@ VOID PhImageListFlushCache(
 
 VOID PhDrawProcessIcon(
     _In_ HDC hdc,
-    _In_ RECT rect,
+    _In_ PRECT rect,
     _In_ ULONG Index,
     _In_ BOOLEAN Large)
 {
@@ -4200,8 +4217,8 @@ VOID PhDrawProcessIcon(
                 PhProcessLargeImageList,
                 Index,
                 hdc,
-                rect.left,
-                rect.top,
+                rect->left,
+                rect->top,
                 ILD_NORMAL | ILD_TRANSPARENT,
                 FALSE
                 );
@@ -4215,8 +4232,8 @@ VOID PhDrawProcessIcon(
                 PhProcessSmallImageList,
                 Index,
                 hdc,
-                rect.left,
-                rect.top,
+                rect->left,
+                rect->top,
                 ILD_NORMAL | ILD_TRANSPARENT,
                 FALSE
                 );

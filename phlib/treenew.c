@@ -36,7 +36,7 @@
 #include <treenewp.h>
 #include <vssym32.h>
 
-BOOLEAN PhTreeNewInitialization(
+RTL_ATOM PhTreeNewInitialization(
     VOID
     )
 {
@@ -44,18 +44,15 @@ BOOLEAN PhTreeNewInitialization(
 
     memset(&wcex, 0, sizeof(WNDCLASSEX));
     wcex.cbSize = sizeof(WNDCLASSEX);
-    wcex.style = CS_DBLCLKS | CS_GLOBALCLASS | CS_PARENTDC;
+    wcex.style = CS_DBLCLKS | CS_GLOBALCLASS;
     wcex.lpfnWndProc = PhTnpWndProc;
     wcex.cbClsExtra = 0;
     wcex.cbWndExtra = sizeof(PVOID);
-    wcex.hInstance = PhInstanceHandle;
+    wcex.hInstance = NtCurrentImageBase();
     wcex.hCursor = PhLoadCursor(NULL, IDC_ARROW);
     wcex.lpszClassName = PH_TREENEW_CLASSNAME;
 
-    if (RegisterClassEx(&wcex) == INVALID_ATOM)
-        return FALSE;
-
-    return TRUE;
+    return RegisterClassEx(&wcex);
 }
 
 LRESULT CALLBACK PhTnpWndProc(
@@ -179,7 +176,7 @@ LRESULT CALLBACK PhTnpWndProc(
         return 0;
     case WM_SETCURSOR:
         {
-            if (PhTnpOnSetCursor(hwnd, context, (HWND)wParam))
+            if (PhTnpOnSetCursor(hwnd, context, (HWND)wParam, LOWORD(lParam), HIWORD(lParam)))
                 return TRUE;
         }
         break;
@@ -336,6 +333,7 @@ LRESULT CALLBACK PhTnpWndProc(
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
+_Function_class_(PH_TREENEW_CALLBACK)
 BOOLEAN NTAPI PhTnpNullCallback(
     _In_ HWND hwnd,
     _In_ PH_TREENEW_MESSAGE Message,
@@ -475,7 +473,7 @@ BOOLEAN PhTnpOnCreate(
     if (Context->Style & TN_STYLE_CUSTOM_HEADERDRAW)
         Context->HeaderCustomDraw = TRUE;
 
-    if (!(Context->FixedHeaderHandle = CreateWindow(
+    if (!(Context->FixedHeaderHandle = PhCreateWindow(
         WC_HEADER,
         NULL,
         WS_CHILD | WS_CLIPSIBLINGS | headerStyle,
@@ -495,7 +493,7 @@ BOOLEAN PhTnpOnCreate(
     if (!(Context->Style & TN_STYLE_NO_COLUMN_REORDER))
         headerStyle |= HDS_DRAGDROP;
 
-    if (!(Context->HeaderHandle = CreateWindow(
+    if (!(Context->HeaderHandle = PhCreateWindow(
         WC_HEADER,
         NULL,
         WS_CHILD | WS_CLIPSIBLINGS | headerStyle,
@@ -512,7 +510,7 @@ BOOLEAN PhTnpOnCreate(
         return FALSE;
     }
 
-    if (!(Context->VScrollHandle = CreateWindow(
+    if (!(Context->VScrollHandle = PhCreateWindow(
         WC_SCROLLBAR,
         NULL,
         WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE | SBS_VERT,
@@ -529,7 +527,7 @@ BOOLEAN PhTnpOnCreate(
         return FALSE;
     }
 
-    if (!(Context->HScrollHandle = CreateWindow(
+    if (!(Context->HScrollHandle = PhCreateWindow(
         WC_SCROLLBAR,
         NULL,
         WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE | SBS_HORZ,
@@ -546,7 +544,7 @@ BOOLEAN PhTnpOnCreate(
         return FALSE;
     }
 
-    if (!(Context->FillerBoxHandle = CreateWindow(
+    if (!(Context->FillerBoxHandle = PhCreateWindow(
         WC_STATIC,
         NULL,
         WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE,
@@ -575,7 +573,8 @@ VOID PhTnpOnSize(
     _In_ PPH_TREENEW_CONTEXT Context
     )
 {
-    GetClientRect(hwnd, &Context->ClientRect);
+    if (!PhGetClientRect(hwnd, &Context->ClientRect))
+        return;
 
     if (Context->BufferedContext && (
         Context->BufferedContextRect.right < Context->ClientRect.right ||
@@ -653,6 +652,16 @@ VOID PhTnpOnDpiChanged(
     PhTnpUpdateTextMetrics(Context);
     PhTnpUpdateThemeData(Context);
     PhTnpUpdateColumnHeadersDpiChanged(Context, oldWindowDpi, Context->WindowDpi);
+
+    {
+        PH_TREENEW_DPICHANGED_EVENT dpiChangedEvent;
+
+        memset(&dpiChangedEvent, 0, sizeof(PH_TREENEW_DPICHANGED_EVENT));
+        dpiChangedEvent.OldWindowDpi = oldWindowDpi;
+        dpiChangedEvent.NewWindowDpi = Context->WindowDpi;
+
+        Context->Callback(Context->Handle, TreeNewDpiChanged, &dpiChangedEvent, NULL, Context->CallbackContext);
+    }
 
     PhTnpSetRedraw(Context, TRUE);
 
@@ -796,7 +805,9 @@ BOOLEAN PhTnpOnNcPaint(
 BOOLEAN PhTnpOnSetCursor(
     _In_ HWND hwnd,
     _In_ PPH_TREENEW_CONTEXT Context,
-    _In_ HWND CursorWindowHandle
+    _In_ HWND CursorWindowHandle,
+    _In_ ULONG HitTest,
+    _In_ ULONG Source
     )
 {
     POINT point;
@@ -865,18 +876,39 @@ VOID PhTnpOnTimer(
 }
 
 VOID PhTnpOnMouseMove(
-    _In_ HWND hwnd,
+    _In_ HWND WindowHandle,
     _In_ PPH_TREENEW_CONTEXT Context,
     _In_ ULONG VirtualKeys,
     _In_ LONG CursorX,
     _In_ LONG CursorY
     )
 {
+    if (FlagOn(Context->Style, TN_STYLE_DRAG_REORDER_ROWS))
+    {
+        // Reorder drag in progress: update target and caret, swallow normal processing (dmex)
+
+        if (Context->ReorderDragActive)
+        {
+            if (Context->ReorderJustStarted)
+            {
+                Context->ReorderJustStarted = FALSE;
+            }
+
+            if (Context->ReorderCursor)
+            {
+                PhSetCursor(Context->ReorderCursor);
+            }
+
+            PhTnpReorderUpdate(Context, CursorX, CursorY);
+            return;
+        }
+    }
+
     TRACKMOUSEEVENT trackMouseEvent;
 
     trackMouseEvent.cbSize = sizeof(TRACKMOUSEEVENT);
     trackMouseEvent.dwFlags = TME_LEAVE;
-    trackMouseEvent.hwndTrack = hwnd;
+    trackMouseEvent.hwndTrack = WindowHandle;
     trackMouseEvent.dwHoverTime = 0;
     TrackMouseEvent(&trackMouseEvent);
 
@@ -999,6 +1031,65 @@ VOID PhTnpOnXxxButtonXxx(
     hitTest.Point.y = CursorY;
     hitTest.InFlags = TN_TEST_COLUMN | TN_TEST_SUBITEM;
     PhTnpHitTest(Context, &hitTest);
+
+    if (FlagOn(Context->Style, TN_STYLE_DRAG_REORDER_ROWS))
+    {
+        // Begin reorder drag if:
+        // - TN_STYLE_DRAG_REORDER_ROWS flag enabled
+        // - Left button down on item content (not plus/minus, not divider)
+        // - Ctrl is held (to avoid conflict with drag selection)
+        if (Message == WM_LBUTTONDOWN &&
+            (VirtualKeys & MK_CONTROL) &&
+            (hitTest.Flags & TN_HIT_ITEM) &&
+            !(hitTest.Flags & (TN_HIT_ITEM_PLUSMINUS | TN_HIT_DIVIDER)))
+        {
+            PH_TREENEW_REORDER_EVENT reorderEvent = { 0 };
+
+            memset(&reorderEvent, 0, sizeof(PH_TREENEW_REORDER_EVENT));
+            reorderEvent.Source = hitTest.Node;
+            reorderEvent.Target = hitTest.Node;
+            reorderEvent.DropAfter = FALSE;
+            reorderEvent.Allow = TRUE;
+
+            Context->Callback(Context->Handle, TreeNewReorderBegin, &reorderEvent, NULL, Context->CallbackContext);
+
+            if (reorderEvent.Allow)
+            {
+                ULONG saveIndex = hitTest.Node ? hitTest.Node->Index : ULONG_MAX;
+                ULONG cancelledByMessage = 0;
+
+                if (PhTnpDetectDrag(Context, CursorX, CursorY, TRUE, &cancelledByMessage))
+                {
+                    // Begin drag-reorder
+                    if (saveIndex != ULONG_MAX && saveIndex < Context->FlatList->Count)
+                    {
+                        PhTnpReorderBegin(Context, saveIndex);
+                        PhTnpReorderUpdateCaretRect(Context);
+                        InvalidateRect(Context->Handle, &Context->ReorderInsertRect, FALSE);
+                        return; // swallow normal selection behavior
+                    }
+                }
+                else
+                {
+                    // If detection consumed up-event, don't duplicate
+                    if (cancelledByMessage == WM_LBUTTONUP)
+                        return;
+                }
+            }
+        }
+
+        // Commit/cancel on mouse up if in reorder mode
+        if (Message == WM_LBUTTONUP && Context->ReorderDragActive)
+        {
+            PhTnpReorderCommit(Context);
+            return;
+        }
+        if (Message == WM_RBUTTONDOWN && Context->ReorderDragActive)
+        {
+            PhTnpReorderCancel(Context);
+            return;
+        }
+    }
 
     controlKey = VirtualKeys & MK_CONTROL;
     shiftKey = VirtualKeys & MK_SHIFT;
@@ -1241,6 +1332,12 @@ VOID PhTnpOnCaptureChanged(
 {
     Context->Tracking = FALSE;
     PhKillTimer(hwnd, TNP_TIMER_NULL);
+
+    if (FlagOn(Context->Style, TN_STYLE_DRAG_REORDER_ROWS))
+    {
+        if (Context->ReorderDragActive && !Context->ReorderJustStarted)
+            PhTnpReorderCancel(Context);
+    }
 }
 
 VOID PhTnpOnKeyDown(
@@ -1251,6 +1348,16 @@ VOID PhTnpOnKeyDown(
     )
 {
     PH_TREENEW_KEY_EVENT keyEvent;
+
+    if (FlagOn(Context->Style, TN_STYLE_DRAG_REORDER_ROWS))
+    {
+        // Cancel reorder drag with ESC
+        if (Context->ReorderDragActive && VirtualKey == VK_ESCAPE)
+        {
+            PhTnpReorderCancel(Context);
+            return;
+        }
+    }
 
     keyEvent.Handled = FALSE;
     keyEvent.VirtualKey = VirtualKey;
@@ -1371,7 +1478,7 @@ VOID PhTnpOnContextMenu(
             clientPoint.y = 0;
         }
 
-        GetWindowRect(hwnd, &windowRect);
+        PhGetWindowRect(hwnd, &windowRect);
         CursorScreenX = windowRect.left + clientPoint.x;
         CursorScreenY = windowRect.top + clientPoint.y;
     }
@@ -1703,9 +1810,16 @@ BOOLEAN PhTnpOnNotify(
             {
                 NMTTDISPINFO *info = (NMTTDISPINFO *)Header;
                 POINT point;
+                PPH_STRING string;
 
-                PhTnpGetMessagePos(hwnd, &point);
-                PhTnpGetTooltipText(Context, &point, &info->lpszText);
+                if (PhTnpGetMessagePos(hwnd, &point))
+                {
+                    if (PhTnpGetTooltipText(Context, &point, &string))
+                    {
+                        info->lpszText = string->Buffer;
+                        break;
+                    }
+                }
             }
         }
         break;
@@ -1886,7 +2000,7 @@ LRESULT PhTnpOnUserMessage(
             {
                 return TRUE; // Nothing to change (dmex)
             }
-     
+
             if (sortOrder != NoSortOrder)
             {
                 if (!(column = PhTnpLookupColumnById(Context, sortColumn)))
@@ -2232,6 +2346,68 @@ LRESULT PhTnpOnUserMessage(
             PhTnpOnUserMessage(hwnd, Context, TNM_INVALIDATENODES, node->Index, node->Index);
        }
        return TRUE;
+    case TNM_FOCUSVISIBLENODE:
+        {
+            ULONG i;
+            ULONG visibleCount;
+            PPH_TREENEW_NODE node;
+
+            if (Context->SuspendUpdateStructure)
+                visibleCount = 0;
+            else
+                visibleCount = Context->FlatList->Count;
+
+            for (i = 0; i < visibleCount; i++)
+            {
+                node = Context->FlatList->Items[i];
+
+                // Select the first visible node.
+                if (node->Visible)
+                {
+                    SetFocus(hwnd);
+
+                    Context->FocusNode = node; // TNM_SETFOCUSNODE
+                    Context->MarkNodeIndex = node->Index; // TNM_SETMARKNODE
+                    PhTnpOnUserMessage(hwnd, Context, TNM_DESELECTRANGE, 0, -1);
+                    PhTnpOnUserMessage(hwnd, Context, TNM_SELECTRANGE, node->Index, node->Index);
+                    PhTnpEnsureVisibleNode(Context, node->Index); // TNM_ENSUREVISIBLE
+                    PhTnpOnUserMessage(hwnd, Context, TNM_INVALIDATENODES, node->Index, node->Index);
+
+                    return TRUE;
+                }
+            }
+        }
+        break;
+    case TNM_GETCELLPARTS:
+        {
+            PPH_TREENEW_GET_CELL_PARTS getCellParts = (PPH_TREENEW_GET_CELL_PARTS)LParam;
+
+            if (getCellParts->Node && getCellParts->Column)
+            {
+                ULONG measureFlags = 0;
+                PH_TREENEW_CELL_PARTS cellparts;
+
+                if (FlagOn(getCellParts->Flags, TN_MEASURE_TEXT))
+                {
+                    measureFlags |= TN_MEASURE_TEXT;
+                }
+
+                RtlZeroMemory(&cellparts, sizeof(PH_TREENEW_CELL_PARTS));
+
+                if (PhTnpGetCellParts(
+                    Context,
+                    getCellParts->Node->Index,
+                    getCellParts->Column,
+                    measureFlags,
+                    &cellparts
+                    ))
+                {
+                    RtlCopyMemory(&getCellParts->Parts, &cellparts, sizeof(PH_TREENEW_CELL_PARTS));
+                    return TRUE;
+                }
+            }
+        }
+        break;
     }
 
     return 0;
@@ -2528,13 +2704,21 @@ VOID PhTnpLayoutHeader(
         toolInfo.cbSize = sizeof(TOOLINFO);
         toolInfo.hwnd = Context->FixedHeaderHandle;
         toolInfo.uId = TNP_TOOLTIPS_FIXED_HEADER;
-        GetClientRect(Context->FixedHeaderHandle, &toolInfo.rect);
-        SendMessage(Context->TooltipsHandle, TTM_NEWTOOLRECT, 0, (LPARAM)&toolInfo);
 
+        if (PhGetClientRect(Context->FixedHeaderHandle, &toolInfo.rect))
+        {
+            SendMessage(Context->TooltipsHandle, TTM_NEWTOOLRECT, 0, (LPARAM)&toolInfo);
+        }
+
+        memset(&toolInfo, 0, sizeof(TOOLINFO));
+        toolInfo.cbSize = sizeof(TOOLINFO);
         toolInfo.hwnd = Context->HeaderHandle;
         toolInfo.uId = TNP_TOOLTIPS_HEADER;
-        GetClientRect(Context->HeaderHandle, &toolInfo.rect);
-        SendMessage(Context->TooltipsHandle, TTM_NEWTOOLRECT, 0, (LPARAM)&toolInfo);
+
+        if (PhGetClientRect(Context->HeaderHandle, &toolInfo.rect))
+        {
+            SendMessage(Context->TooltipsHandle, TTM_NEWTOOLRECT, 0, (LPARAM)&toolInfo);
+        }
     }
 }
 
@@ -3446,7 +3630,7 @@ VOID PhTnpAutoSizeColumnHeader(
             }
         }
 
-        newWidth = maximumWidth + TNP_CELL_RIGHT_MARGIN; // right padding
+        newWidth = maximumWidth + Context->CellMarginRight; // right padding
 
         if (Column->Fixed)
             newWidth++;
@@ -3802,7 +3986,7 @@ BOOLEAN PhTnpGetCellParts(
     Parts->CellRect.top = Parts->RowRect.top;
     Parts->CellRect.bottom = Parts->RowRect.bottom;
 
-    currentX += TNP_CELL_LEFT_MARGIN;
+    currentX += Context->CellMarginLeft;
 
     if (Column == Context->FirstColumn)
     {
@@ -3830,13 +4014,13 @@ BOOLEAN PhTnpGetCellParts(
             Parts->IconRect.top = Parts->RowRect.top + iconVerticalMargin;
             Parts->IconRect.bottom = Parts->RowRect.bottom - iconVerticalMargin;
 
-            currentX += Context->SmallIconWidth + TNP_ICON_RIGHT_PADDING;
+            currentX += Context->SmallIconWidth + Context->IconRightPadding;
         }
     }
 
     Parts->Flags |= TN_PART_CONTENT;
     Parts->ContentRect.left = currentX;
-    Parts->ContentRect.right = Parts->CellRect.right - TNP_CELL_RIGHT_MARGIN;
+    Parts->ContentRect.right = Parts->CellRect.right - Context->CellMarginRight;
     Parts->ContentRect.top = Parts->RowRect.top;
     Parts->ContentRect.bottom = Parts->RowRect.bottom;
 
@@ -4024,7 +4208,7 @@ VOID PhTnpHitTest(
                         isFirstColumn = HitTest->Column == Context->FirstColumn;
 
                         currentX = columnX;
-                        currentX += TNP_CELL_LEFT_MARGIN;
+                        currentX += Context->CellMarginLeft;
 
                         if (isFirstColumn)
                         {
@@ -5759,6 +5943,14 @@ VOID PhTnpPaint(
         PhTnpDrawSelectionRectangle(Context, hdc, &Context->DragRect);
     }
 
+    if (FlagOn(Context->Style, TN_STYLE_DRAG_REORDER_ROWS))
+    {
+        if (Context->ReorderDragActive)
+        {
+            PhTnpDrawInsertionCaret(Context, hdc);
+        }
+    }
+
     if (Context->HeaderCustomDraw)
     {
         //if (Context->FixedColumnVisible && Context->FixedHeaderHandle)
@@ -6366,15 +6558,15 @@ VOID PhTnpInitializeTooltips(
 {
     TOOLINFO toolInfo;
 
-    Context->TooltipsHandle = CreateWindowEx(
-        WS_EX_TRANSPARENT, // solves double-click problem
+    Context->TooltipsHandle = PhCreateWindowEx(
         TOOLTIPS_CLASS,
         NULL,
         WS_POPUP | TTS_NOANIMATE | TTS_NOFADE | TTS_NOPREFIX | TTS_ALWAYSTIP,
-        0,
-        0,
-        0,
-        0,
+        WS_EX_TOPMOST | WS_EX_TRANSPARENT, // solves double-click problem (wj32)
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
         NULL,
         NULL,
         NULL,
@@ -6410,6 +6602,13 @@ VOID PhTnpInitializeTooltips(
     toolInfo.lParam = TNP_TOOLTIPS_HEADER;
     SendMessage(Context->TooltipsHandle, TTM_ADDTOOL, 0, (LPARAM)&toolInfo);
 
+    SetWindowPos(
+        Context->TooltipsHandle,
+        HWND_TOPMOST,
+        0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+        );
+
     if (Context->HeaderCustomDraw)
     {
         Context->HeaderHotColumn = ULONG_MAX;
@@ -6434,7 +6633,7 @@ _Success_(return)
 BOOLEAN PhTnpGetTooltipText(
     _In_ PPH_TREENEW_CONTEXT Context,
     _In_ PPOINT Point,
-    _Out_ PWSTR *Text
+    _Out_ PPH_STRING *Text
     )
 {
     PH_TREENEW_HIT_TEST hitTest;
@@ -6539,7 +6738,7 @@ BOOLEAN PhTnpGetTooltipText(
 
     if (Context->TooltipText)
     {
-        *Text = Context->TooltipText->Buffer;
+        *Text = Context->TooltipText;
         return TRUE;
     }
 
@@ -6673,7 +6872,7 @@ BOOLEAN PhTnpGetHeaderTooltipText(
     _In_ PPH_TREENEW_CONTEXT Context,
     _In_ BOOLEAN Fixed,
     _In_ PPOINT Point,
-    _Out_ PWSTR *Text
+    _Out_ PPH_STRING *Text
     )
 {
     LOGICAL result;
@@ -6715,7 +6914,7 @@ BOOLEAN PhTnpGetHeaderTooltipText(
         PhMoveReference(&Context->TooltipText, PhCreateStringEx(text, textCount * sizeof(WCHAR)));
     }
 
-    *Text = Context->TooltipText->Buffer;
+    *Text = Context->TooltipText;
 
     // Always use the default parameters for column header tooltips.
     Context->NewTooltipFont = Context->Font;
@@ -6982,7 +7181,7 @@ BOOLEAN TnHeaderCustomPaint(
 VOID PhTnpHeaderCreateBufferedContext(
     _In_ PPH_TREENEW_CONTEXT Context,
     _In_ HDC Hdc,
-    _In_ RECT BufferRect
+    _In_ PRECT BufferRect
     )
 {
     Context->HeaderBufferedDc = CreateCompatibleDC(Hdc);
@@ -6990,7 +7189,7 @@ VOID PhTnpHeaderCreateBufferedContext(
     if (!Context->HeaderBufferedDc)
         return;
 
-    Context->HeaderBufferedContextRect = BufferRect;
+    Context->HeaderBufferedContextRect = *BufferRect;
     Context->HeaderBufferedBitmap = CreateCompatibleBitmap(
         Hdc,
         Context->HeaderBufferedContextRect.right,
@@ -7089,9 +7288,16 @@ LRESULT CALLBACK PhTnpHeaderHookWndProc(
                     {
                         NMTTDISPINFO *info = (NMTTDISPINFO *)header;
                         POINT point;
+                        PPH_STRING string;
 
-                        PhTnpGetMessagePos(hwnd, &point);
-                        PhTnpGetHeaderTooltipText(context, info->lParam == TNP_TOOLTIPS_FIXED_HEADER, &point, &info->lpszText);
+                        if (PhTnpGetMessagePos(hwnd, &point))
+                        {
+                            if (PhTnpGetHeaderTooltipText(context, info->lParam == TNP_TOOLTIPS_FIXED_HEADER, &point, &string))
+                            {
+                                info->lpszText = string->Buffer;
+                                break;
+                            }
+                        }
                     }
                 }
                 break;
@@ -7792,20 +7998,33 @@ VOID PhTnpCreateBufferedContext(
 
 VOID PhTnpDestroyBufferedContext(
     _In_ PPH_TREENEW_CONTEXT Context
-    )
+)
 {
     // The original bitmap must be selected back into the context, otherwise the bitmap can't be
     // deleted.
-    SelectBitmap(Context->BufferedContext, Context->BufferedOldBitmap);
-    DeleteBitmap(Context->BufferedBitmap);
-    DeleteDC(Context->BufferedContext);
 
-    Context->BufferedContext = NULL;
-    Context->BufferedBitmap = NULL;
+    if (Context->BufferedOldBitmap)
+    {
+        SelectBitmap(Context->BufferedContext, Context->BufferedOldBitmap);
+        Context->BufferedOldBitmap = NULL;
+    }
+
+    if (Context->BufferedBitmap)
+    {
+        DeleteBitmap(Context->BufferedBitmap);
+        Context->BufferedBitmap = NULL;
+    }
+
+    if (Context->BufferedContext)
+    {
+        DeleteDC(Context->BufferedContext);
+        Context->BufferedContext = NULL;
+    }
 }
 
-VOID PhTnpGetMessagePos(
-    _In_ HWND hwnd,
+_Success_(return)
+BOOLEAN PhTnpGetMessagePos(
+    _In_ HWND WindowHandle,
     _Out_ PPOINT ClientPoint
     )
 {
@@ -7815,7 +8034,235 @@ VOID PhTnpGetMessagePos(
     position = GetMessagePos();
     point.x = GET_X_LPARAM(position);
     point.y = GET_Y_LPARAM(position);
-    ScreenToClient(hwnd, &point);
 
-    *ClientPoint = point;
+    if (ScreenToClient(WindowHandle, &point))
+    {
+        *ClientPoint = point;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+LRESULT PhTnSendMessage(
+    _In_ HWND WindowHandle,
+    _In_ ULONG WindowMessage,
+    _Pre_maybenull_ _Post_valid_ WPARAM wParam,
+    _Pre_maybenull_ _Post_valid_ LPARAM lParam
+    )
+{
+    if (WindowMessage >= TNM_FIRST && WindowMessage <= TNM_LAST)
+    {
+        PVOID context;
+
+        assert(HandleToUlong(NtCurrentThreadId()) == GetWindowThreadProcessId(WindowHandle, NULL));
+
+        if (context = PhGetWindowContextEx(WindowHandle))
+        {
+            return PhTnpOnUserMessage(WindowHandle, context, WindowMessage, wParam, lParam);
+        }
+    }
+
+    return SendMessage(WindowHandle, WindowMessage, wParam, lParam);
+}
+
+//
+// Drag-reorder
+//
+
+VOID PhTnpDrawInsertionCaret(
+    _In_ PPH_TREENEW_CONTEXT Context,
+    _In_ HDC Hdc
+    )
+{
+    RECT r;
+    HPEN old;
+    COLORREF prev;
+
+    r = Context->ReorderInsertRect;
+
+    if (r.right <= r.left || r.bottom <= r.top)
+        return;
+
+    old = SelectPen(Hdc, PhGetStockPen(DC_PEN));
+    prev = SetDCPenColor(Hdc, RGB(0, 120, 215)); // Windows accent blue-ish
+
+    POINT pts[2];
+    pts[0].x = r.left;
+    pts[0].y = (r.top + r.bottom) / 2;
+    pts[1].x = r.right;
+    pts[1].y = pts[0].y;
+    Polyline(Hdc, pts, 2);
+
+    SetDCPenColor(Hdc, prev);
+    if (old) SelectPen(Hdc, old);
+}
+
+VOID PhTnpReorderInvalidateCaret(
+    _In_ PPH_TREENEW_CONTEXT Context
+    )
+{
+    if (Context->ReorderInsertRect.right > Context->ReorderInsertRect.left &&
+        Context->ReorderInsertRect.bottom > Context->ReorderInsertRect.top)
+    {
+        InvalidateRect(Context->Handle, &Context->ReorderInsertRect, FALSE);
+    }
+}
+
+VOID PhTnpReorderUpdateCaretRect(
+    _In_ PPH_TREENEW_CONTEXT Context
+    )
+{
+    // Compute y position for insertion caret
+    LONG viewLeft = 0;
+    LONG viewRight = Context->ClientRect.right - (Context->VScrollVisible ? Context->VScrollWidth : 0);
+    LONG rowYTop = Context->HeaderHeight + ((LONG)Context->ReorderTargetIndex - Context->VScrollPosition) * Context->RowHeight;
+
+    if (Context->ReorderDropAfter)
+    {
+        rowYTop += Context->RowHeight;
+    }
+
+    RECT rect;
+    rect.left   = viewLeft;
+    rect.right  = viewRight;
+    rect.top    = rowYTop - 1;
+    rect.bottom = rowYTop + 1;
+
+    memcpy(&Context->ReorderInsertRect, &rect, sizeof(RECT));
+}
+
+VOID PhTnpReorderBegin(
+    _In_ PPH_TREENEW_CONTEXT Context,
+    _In_ ULONG SourceIndex
+    )
+{
+    Context->ReorderDragActive  = TRUE;
+    Context->ReorderSourceIndex = SourceIndex;
+    Context->ReorderTargetIndex = SourceIndex;
+    Context->ReorderDropAfter   = FALSE;
+    Context->ReorderJustStarted = TRUE;
+
+    SetCapture(Context->Handle);
+
+    if (!Context->ReorderCursor)
+        Context->ReorderCursor = PhLoadCursor(NULL, IDC_SIZENS);
+}
+
+VOID PhTnpReorderCancel(
+    _In_ PPH_TREENEW_CONTEXT Context
+    )
+{
+    if (!Context->ReorderDragActive)
+        return;
+
+    {
+        PH_TREENEW_REORDER_EVENT reorderEvent;
+
+        memset(&reorderEvent, 0, sizeof(PH_TREENEW_REORDER_EVENT));
+        reorderEvent.Source = (Context->ReorderSourceIndex < Context->FlatList->Count) ? (PPH_TREENEW_NODE)Context->FlatList->Items[Context->ReorderSourceIndex] : NULL;
+        reorderEvent.Target = (Context->ReorderTargetIndex < Context->FlatList->Count) ? (PPH_TREENEW_NODE)Context->FlatList->Items[Context->ReorderTargetIndex] : NULL;
+        reorderEvent.DropAfter = Context->ReorderDropAfter;
+
+        Context->Callback(Context->Handle, TreeNewReorderCancel, &reorderEvent, NULL, Context->CallbackContext);
+    }
+
+    PhTnpReorderInvalidateCaret(Context);
+
+    memset(&Context->ReorderInsertRect, 0, sizeof(Context->ReorderInsertRect));
+
+    Context->ReorderDragActive = FALSE;
+
+    ReleaseCapture();
+
+    InvalidateRect(Context->Handle, NULL, FALSE);
+}
+
+VOID PhTnpReorderCommit(
+    _In_ PPH_TREENEW_CONTEXT Context
+    )
+{
+    PH_TREENEW_REORDER_EVENT reorderEvent;
+
+    if (!Context->ReorderDragActive)
+        return;
+
+    // No-op if same place
+    //if (Context->ReorderSourceIndex == Context->ReorderTargetIndex &&
+    //    !Context->ReorderDropAfter)
+    //{
+    //    PhTnpReorderCancel(Context);
+    //    return;
+    //}
+
+    memset(&reorderEvent, 0, sizeof(PH_TREENEW_REORDER_EVENT));
+    reorderEvent.Source = (Context->ReorderSourceIndex < Context->FlatList->Count) ? (PPH_TREENEW_NODE)Context->FlatList->Items[Context->ReorderSourceIndex] : NULL;
+    reorderEvent.Target = (Context->ReorderTargetIndex < Context->FlatList->Count) ? (PPH_TREENEW_NODE)Context->FlatList->Items[Context->ReorderTargetIndex] : NULL;
+    reorderEvent.DropAfter = Context->ReorderDropAfter;
+    reorderEvent.Allow = TRUE;
+
+    Context->Callback(Context->Handle, TreeNewReorderCommit, &reorderEvent, NULL, Context->CallbackContext);
+
+    PhTnpReorderInvalidateCaret(Context);
+
+    Context->ReorderInsertRect = (RECT){ 0 };
+    Context->ReorderDragActive = FALSE;
+
+    ReleaseCapture();
+
+    // Parent should reorder underlying data and then trigger TNM_NODESSTRUCTURED
+    InvalidateRect(Context->Handle, NULL, FALSE);
+}
+
+VOID PhTnpReorderUpdate(
+    _In_ PPH_TREENEW_CONTEXT Context,
+    _In_ LONG CursorX,
+    _In_ LONG CursorY
+    )
+{
+    LONG y;
+    ULONG idx;
+
+    if (Context->FlatList->Count == 0)
+        return;
+
+    // Update target index and caret based on cursor position
+
+    y = CursorY;
+    if (y < Context->HeaderHeight)
+        y = Context->HeaderHeight;
+
+    idx = (y - Context->HeaderHeight) / Context->RowHeight + Context->VScrollPosition;
+    if (idx >= Context->FlatList->Count)
+        idx = Context->FlatList->Count - 1;
+
+    BOOLEAN dropAfter = FALSE;
+    LONG localYTop = Context->HeaderHeight + ((LONG)idx - Context->VScrollPosition) * Context->RowHeight;
+    LONG mid = localYTop + (Context->RowHeight / 2);
+    if (CursorY >= mid)
+    {
+        dropAfter = TRUE;
+    }
+
+    if (idx != Context->ReorderTargetIndex || dropAfter != Context->ReorderDropAfter)
+    {
+        PH_TREENEW_REORDER_EVENT reorderEvent;
+
+        memset(&reorderEvent, 0, sizeof(PH_TREENEW_REORDER_EVENT));
+        reorderEvent.Source = (Context->ReorderSourceIndex < Context->FlatList->Count) ? (PPH_TREENEW_NODE)Context->FlatList->Items[Context->ReorderSourceIndex] : NULL;
+        reorderEvent.Target = (idx < Context->FlatList->Count) ? (PPH_TREENEW_NODE)Context->FlatList->Items[idx] : NULL;
+        reorderEvent.DropAfter = dropAfter;
+        reorderEvent.Allow = TRUE;
+
+        Context->Callback(Context->Handle, TreeNewReorderOver, &reorderEvent, NULL, Context->CallbackContext);
+
+        if (reorderEvent.Allow)
+        {
+            PhTnpReorderInvalidateCaret(Context);
+            Context->ReorderTargetIndex = idx;
+            Context->ReorderDropAfter   = dropAfter;
+            PhTnpReorderUpdateCaretRect(Context);
+            InvalidateRect(Context->Handle, &Context->ReorderInsertRect, FALSE);
+        }
+    }
 }

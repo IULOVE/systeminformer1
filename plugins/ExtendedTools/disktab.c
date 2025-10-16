@@ -19,6 +19,8 @@ static BOOLEAN DiskTreeNewCreated = FALSE;
 static HWND DiskTreeNewHandle = NULL;
 static ULONG DiskTreeNewSortColumn = 0;
 static PH_SORT_ORDER DiskTreeNewSortOrder = NoSortOrder;
+static CONST PH_STRINGREF DiskPageText = PH_STRINGREF_INIT(L"Disk");
+static CONST PH_STRINGREF DiskBannerText = PH_STRINGREF_INIT(L"Search Disk");
 static CONST PH_STRINGREF DiskTreeEmptyText = PH_STRINGREF_INIT(L"Disk monitoring requires System Informer to be restarted with administrative privileges.");
 static PPH_STRING DiskTreeErrorText = NULL;
 
@@ -42,16 +44,15 @@ VOID EtInitializeDiskTab(
     PH_MAIN_TAB_PAGE page;
 
     memset(&page, 0, sizeof(PH_MAIN_TAB_PAGE));
-    PhInitializeStringRef(&page.Name, L"Disk");
+    page.Name = DiskPageText;
     page.Callback = EtpDiskPageCallback;
     DiskPage = PhPluginCreateTabPage(&page);
 
-    if (ToolStatusInterface = PhGetPluginInterfaceZ(TOOLSTATUS_PLUGIN_NAME, TOOLSTATUS_INTERFACE_VERSION))
+    if (ToolStatusInterface = PhGetPluginInterfaceZ(TOOLSTATUS_INTERFACE_NAME, TOOLSTATUS_INTERFACE_VERSION))
     {
         PTOOLSTATUS_TAB_INFO tabInfo;
 
-        tabInfo = ToolStatusInterface->RegisterTabInfo(DiskPage->Index);
-        tabInfo->BannerText = L"Search Disk";
+        tabInfo = ToolStatusInterface->RegisterTabInfo(DiskPage->Index, &DiskBannerText);
         tabInfo->ActivateContent = EtpToolStatusActivateContent;
         tabInfo->GetTreeNewHandle = EtpToolStatusGetTreeNewHandle;
     }
@@ -203,7 +204,7 @@ BOOLEAN EtpDiskPageCallback(
         return TRUE;
     case MainTabPageSelected:
         {
-            BOOLEAN selected = (BOOLEAN)Parameter1;
+            BOOLEAN selected = (BOOLEAN)PtrToUlong(Parameter1);
 
             if (selected)
             {
@@ -238,6 +239,7 @@ BOOLEAN EtpDiskPageCallback(
     return FALSE;
 }
 
+_Function_class_(PH_HASHTABLE_EQUAL_FUNCTION)
 BOOLEAN EtpDiskNodeHashtableEqualFunction(
     _In_ PVOID Entry1,
     _In_ PVOID Entry2
@@ -249,6 +251,7 @@ BOOLEAN EtpDiskNodeHashtableEqualFunction(
     return diskNode1->DiskItem == diskNode2->DiskItem;
 }
 
+_Function_class_(PH_HASHTABLE_HASH_FUNCTION)
 ULONG EtpDiskNodeHashtableHashFunction(
     _In_ PVOID Entry
     )
@@ -288,6 +291,7 @@ VOID EtInitializeDiskTreeList(
     }
 
     TreeNew_SetSort(WindowHandle, ETDSTNC_TOTALRATEAVERAGE, DescendingSortOrder);
+    TreeNew_SetTriState(WindowHandle, TRUE);
     TreeNew_SetRedraw(WindowHandle, TRUE);
 
     EtLoadSettingsDiskTreeList(WindowHandle);
@@ -1286,6 +1290,7 @@ VOID NTAPI EtpSearchChangedHandler(
     PhApplyTreeNewFilters(&FilterSupport);
 }
 
+_Function_class_(PH_TN_FILTER_FUNCTION)
 BOOLEAN NTAPI EtpSearchDiskListFilterCallback(
     _In_ PPH_TREENEW_NODE Node,
     _In_opt_ PVOID Context
@@ -1310,6 +1315,7 @@ BOOLEAN NTAPI EtpSearchDiskListFilterCallback(
     return FALSE;
 }
 
+_Function_class_(TOOLSTATUS_TAB_ACTIVATE_CONTENT)
 VOID NTAPI EtpToolStatusActivateContent(
     _In_ BOOLEAN Select
     )
@@ -1319,10 +1325,13 @@ VOID NTAPI EtpToolStatusActivateContent(
     if (Select)
     {
         if (TreeNew_GetFlatNodeCount(DiskTreeNewHandle) > 0)
+        {
             EtSelectAndEnsureVisibleDiskNode((PET_DISK_NODE)TreeNew_GetFlatNode(DiskTreeNewHandle, 0));
+        }
     }
 }
 
+_Function_class_(TOOLSTATUS_GET_TREENEW_HANDLE)
 HWND NTAPI EtpToolStatusGetTreeNewHandle(
     VOID
     )

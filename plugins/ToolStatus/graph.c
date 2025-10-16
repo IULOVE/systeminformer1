@@ -10,6 +10,7 @@
  */
 
 #include "toolstatus.h"
+#include <toolstatusintf.h>
 
 static PPH_LIST PhpToolbarGraphList = NULL;
 static PPH_HASHTABLE PhpToolbarGraphHashtable = NULL;
@@ -226,10 +227,14 @@ BOOLEAN ToolbarAddGraph(
             PhAddItemSimpleHashtable(PhpToolbarGraphHashtable, Graph->GraphHandle, Graph);
 
             if (!RebarBandExists(Graph->GraphId))
+            {
                 RebarBandInsert(Graph->GraphId, Graph->GraphHandle, Width, Height); // height: 85
+            }
 
             if (!IsWindowVisible(Graph->GraphHandle))
+            {
                 ShowWindow(Graph->GraphHandle, SW_SHOW);
+            }
         }
     }
 
@@ -285,6 +290,11 @@ VOID ToolbarUpdateGraphs(
     VOID
     )
 {
+    if (!ToolStatusConfig.ToolBarEnabled)
+        return;
+    if (!PhpToolbarGraphList)
+        return;
+
     for (ULONG i = 0; i < PhpToolbarGraphList->Count; i++)
     {
         PPH_TOOLBAR_GRAPH graph = PhpToolbarGraphList->Items[i];
@@ -306,6 +316,8 @@ VOID ToolbarUpdateGraphVisualStates(
     )
 {
     if (!ToolStatusConfig.ToolBarEnabled)
+        return;
+    if (!PhpToolbarGraphList)
         return;
 
     for (ULONG i = 0; i < PhpToolbarGraphList->Count; i++)
@@ -500,6 +512,23 @@ VOID ToolbarGraphCreatePluginMenu(
     }
 }
 
+VOID ToolbarUpdateVisibleGraph(
+    _In_ PVOID Context
+    )
+{
+    PPH_TOOLBAR_GRAPH icon = (PPH_TOOLBAR_GRAPH)Context;
+
+    if (!icon)
+    {
+        return;
+    }
+
+    ToolbarSetVisibleGraph(icon, !(icon->Flags & PH_NF_ICON_ENABLED));
+
+    ToolbarGraphSaveSettings();
+    ReBarSaveLayoutSettings();
+}
+
 //
 // BEGIN copied from ProcessHacker/sysinfo.c
 //
@@ -684,6 +713,7 @@ static PPH_STRING PhSipGetMaxIoString(
 // END copied from ProcessHacker/sysinfo.c
 //
 
+_Function_class_(TOOLSTATUS_GRAPH_CALLBACK)
 BOOLEAN CpuHistoryGraphMessageCallback(
     _In_ HWND WindowHandle,
     _In_ ULONG Message,
@@ -787,6 +817,7 @@ BOOLEAN CpuHistoryGraphMessageCallback(
     return TRUE;
 }
 
+_Function_class_(TOOLSTATUS_GRAPH_CALLBACK)
 BOOLEAN PhysicalHistoryGraphMessageCallback(
     _In_ HWND WindowHandle,
     _In_ ULONG Message,
@@ -882,6 +913,7 @@ BOOLEAN PhysicalHistoryGraphMessageCallback(
     return TRUE;
 }
 
+_Function_class_(TOOLSTATUS_GRAPH_CALLBACK)
 BOOLEAN CommitHistoryGraphMessageCallback(
     _In_ HWND WindowHandle,
     _In_ ULONG Message,
@@ -977,6 +1009,7 @@ BOOLEAN CommitHistoryGraphMessageCallback(
     return TRUE;
 }
 
+_Function_class_(TOOLSTATUS_GRAPH_CALLBACK)
 BOOLEAN IoHistoryGraphMessageCallback(
     _In_ HWND WindowHandle,
     _In_ ULONG Message,

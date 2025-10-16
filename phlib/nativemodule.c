@@ -18,6 +18,7 @@ BOOLEAN NTAPI PH_ENUM_MODULES_CALLBACK(
     _In_ HANDLE ProcessHandle,
     _In_ PVOID Entry,
     _In_ PVOID AddressOfEntry,
+    _In_ ULONG SizeOfEntry,
     _In_opt_ PVOID Context1,
     _In_opt_ PVOID Context2
     );
@@ -26,13 +27,13 @@ typedef PH_ENUM_MODULES_CALLBACK* PPH_ENUM_MODULES_CALLBACK;
 /**
  * Creates a section object.
  *
- * @param SectionHandle Pointer to a variable that receives a handle to the section object.
- * @param DesiredAccess The access mask that specifies the requested access to the section object.
- * @param MaximumSize The maximum size, in bytes, of the section. The actual size when backed by the paging file, or the maximum the file can be extended or mapped when backed by an ordinary file.
- * @param SectionPageProtection Specifies the protection to place on each page in the section.
- * @param AllocationAttributes A bitmask of SEC_XXX flags that determines the allocation attributes of the section.
- * @param FileHandle Optionally specifies a handle for an open file object. If the value of FileHandle is NULL, the section is backed by the paging file. Otherwise, the section is backed by the specified file.
- * @return NTSTATUS Successful or errant status.
+ * \param SectionHandle Pointer to a variable that receives a handle to the section object.
+ * \param DesiredAccess The access mask that specifies the requested access to the section object.
+ * \param MaximumSize The maximum size, in bytes, of the section. The actual size when backed by the paging file, or the maximum the file can be extended or mapped when backed by an ordinary file.
+ * \param SectionPageProtection Specifies the protection to place on each page in the section.
+ * \param AllocationAttributes A bitmask of SEC_XXX flags that determines the allocation attributes of the section.
+ * \param FileHandle Optionally specifies a handle for an open file object. If the value of FileHandle is NULL, the section is backed by the paging file. Otherwise, the section is backed by the specified file.
+ * \return NTSTATUS Successful or errant status.
  */
 NTSTATUS PhCreateSection(
     _Out_ PHANDLE SectionHandle,
@@ -209,7 +210,7 @@ NTSTATUS PhEnumKernelModules(
     ULONG bufferSize;
 
     bufferSize = initialBufferSize;
-    buffer = PhAllocate(bufferSize);
+    buffer = PhAllocateZero(bufferSize);
 
     status = NtQuerySystemInformation(
         SystemModuleInformation,
@@ -221,7 +222,7 @@ NTSTATUS PhEnumKernelModules(
     if (status == STATUS_INFO_LENGTH_MISMATCH)
     {
         PhFree(buffer);
-        buffer = PhAllocate(bufferSize);
+        buffer = PhAllocateZero(bufferSize);
 
         status = NtQuerySystemInformation(
             SystemModuleInformation,
@@ -233,6 +234,28 @@ NTSTATUS PhEnumKernelModules(
 
     if (!NT_SUCCESS(status))
         return status;
+
+    // Note: Windows 11 24H2 introduced breaking changes where, without SeDebugPrivilege, every module's reported base address is zero.
+    // System Informer previously keyed modules by base address in a hash table; this causes enumeration collisions and prevents modules
+    // from being displayed correctly. It also breaks displaying symbol information and interoperability with APIs that require distinct
+    // base addresses for symbol resolution (for example, dbghelp). System Informer only presents module metadata and does not require the
+    // base addresses to be valid. To preserve unique identifiers and restore correct enumeration and symbol-related behavior, generate a
+    // synthetic base address for each module above MaximumUserModeAddress. (dmex)
+
+    if (WindowsVersion >= WINDOWS_11_24H2 && !PhGetOwnTokenAttributes().Elevated)
+    {
+        PBYTE pseudoBase = IntToPtr(INT32_MIN);
+        PRTL_PROCESS_MODULE_INFORMATION module;
+
+        for (ULONG i = 0; i < buffer->NumberOfModules; i++)
+        {
+            module = &buffer->Modules[i];
+
+            if (module->ImageBase == 0)
+                module->ImageBase = pseudoBase;
+            pseudoBase += module->ImageSize;
+        }
+    }
 
     if (bufferSize <= 0x100000) initialBufferSize = bufferSize;
     *Modules = buffer;
@@ -252,11 +275,11 @@ NTSTATUS PhEnumKernelModulesEx(
 {
     static ULONG initialBufferSize = 0x1000;
     NTSTATUS status;
-    PVOID buffer;
+    PRTL_PROCESS_MODULE_INFORMATION_EX buffer;
     ULONG bufferSize;
 
     bufferSize = initialBufferSize;
-    buffer = PhAllocate(bufferSize);
+    buffer = PhAllocateZero(bufferSize);
 
     status = NtQuerySystemInformation(
         SystemModuleInformationEx,
@@ -268,7 +291,7 @@ NTSTATUS PhEnumKernelModulesEx(
     if (status == STATUS_INFO_LENGTH_MISMATCH)
     {
         PhFree(buffer);
-        buffer = PhAllocate(bufferSize);
+        buffer = PhAllocateZero(bufferSize);
 
         status = NtQuerySystemInformation(
             SystemModuleInformationEx,
@@ -280,6 +303,26 @@ NTSTATUS PhEnumKernelModulesEx(
 
     if (!NT_SUCCESS(status))
         return status;
+
+    // Note: Windows 11 24H2 introduced breaking changes where, without SeDebugPrivilege, every module's reported base address is zero.
+    // System Informer previously keyed modules by base address in a hash table; this causes enumeration collisions and prevents modules
+    // from being displayed correctly. It also breaks displaying symbol information and interoperability with APIs that require distinct
+    // base addresses for symbol resolution (for example, dbghelp). System Informer only presents module metadata and does not require the
+    // base addresses to be valid. To preserve unique identifiers and restore correct enumeration and symbol-related behavior, generate a
+    // synthetic base address for each module above MaximumUserModeAddress. (dmex)
+
+    if (WindowsVersion >= WINDOWS_11_24H2 && !PhGetOwnTokenAttributes().Elevated)
+    {
+        PBYTE pseudoBase = IntToPtr(INT32_MIN);
+        PRTL_PROCESS_MODULE_INFORMATION_EX module;
+
+        for (module = buffer; module->NextOffset; module = RTL_PTR_ADD(module, module->NextOffset))
+        {
+            if (module->ImageBase == 0)
+                module->ImageBase = pseudoBase;
+            pseudoBase += module->ImageSize;
+        }
+    }
 
     if (bufferSize <= 0x100000) initialBufferSize = bufferSize;
     *Modules = buffer;
@@ -368,7 +411,7 @@ NTSTATUS PhGetKernelFileNameEx(
         );
 
     if (status != STATUS_SUCCESS && status != STATUS_INFO_LENGTH_MISMATCH)
-        return status;
+        return STATUS_UNSUCCESSFUL;
     if (status == STATUS_SUCCESS || modules->NumberOfModules < 1)
         return STATUS_UNSUCCESSFUL;
 
@@ -377,12 +420,17 @@ NTSTATUS PhGetKernelFileNameEx(
         *FileName = PhZeroExtendToUtf16((PCSTR)modules->Modules[0].FullPathName);
     }
 
-    if (WindowsVersion >= WINDOWS_10_22H2)
+    if (WindowsVersion >= WINDOWS_11_24H2 && !PhGetOwnTokenAttributes().Elevated)
     {
-        if (modules->Modules[0].ImageBase == NULL)
-        {
-            modules->Modules[0].ImageBase = (PVOID)(ULONG64_MAX - 1);
-        }
+        // Note: Windows 11 24H2 introduced breaking changes where, without SeDebugPrivilege, every module's reported base address is zero.
+        // System Informer previously keyed modules by base address in a hash table; this causes enumeration collisions and prevents modules
+        // from being displayed correctly. It also breaks displaying symbol information and interoperability with APIs that require distinct
+        // base addresses for symbol resolution (for example, dbghelp). System Informer only presents module metadata and does not require the
+        // base addresses to be valid. To preserve unique identifiers and restore correct enumeration and symbol-related behavior, generate a
+        // synthetic base address for each module above MaximumUserModeAddress. (dmex)
+
+        if (modules->Modules[0].ImageBase == 0)
+            modules->Modules[0].ImageBase = IntToPtr(INT32_MIN);
     }
 
     *ImageBase = modules->Modules[0].ImageBase;
@@ -437,11 +485,11 @@ NTSTATUS PhpEnumProcessModules(
 {
     NTSTATUS status;
     PPEB peb;
-    PPEB_LDR_DATA ldr;
+    PVOID ldr;
     PEB_LDR_DATA pebLdrData;
     PLIST_ENTRY startLink;
     PLIST_ENTRY currentLink;
-    ULONG dataTableEntrySize;
+    ULONG entrySize;
     LDR_DATA_TABLE_ENTRY currentEntry;
     ULONG i;
 
@@ -452,7 +500,7 @@ NTSTATUS PhpEnumProcessModules(
         return status;
 
     // Read the address of the loader data.
-    status = NtReadVirtualMemory(
+    status = PhReadVirtualMemory(
         ProcessHandle,
         PTR_ADD_OFFSET(peb, FIELD_OFFSET(PEB, Ldr)),
         &ldr,
@@ -463,12 +511,11 @@ NTSTATUS PhpEnumProcessModules(
     if (!NT_SUCCESS(status))
         return status;
 
-    // Check the process has initialized (dmex)
     if (!ldr)
         return STATUS_UNSUCCESSFUL;
 
     // Read the loader data.
-    status = NtReadVirtualMemory(
+    status = PhReadVirtualMemory(
         ProcessHandle,
         ldr,
         &pebLdrData,
@@ -479,20 +526,21 @@ NTSTATUS PhpEnumProcessModules(
     if (!NT_SUCCESS(status))
         return status;
 
+    // Check the loader was initialized (dmex)
     if (!pebLdrData.Initialized)
         return STATUS_UNSUCCESSFUL;
 
     if (WindowsVersion >= WINDOWS_11)
-        dataTableEntrySize = LDR_DATA_TABLE_ENTRY_SIZE_WIN11;
+        entrySize = LDR_DATA_TABLE_ENTRY_SIZE_WIN11;
     else if (WindowsVersion >= WINDOWS_8)
-        dataTableEntrySize = LDR_DATA_TABLE_ENTRY_SIZE_WIN8;
+        entrySize = LDR_DATA_TABLE_ENTRY_SIZE_WIN8;
     else
-        dataTableEntrySize = LDR_DATA_TABLE_ENTRY_SIZE_WIN7;
+        entrySize = LDR_DATA_TABLE_ENTRY_SIZE_WIN7;
 
     // Traverse the linked list (in load order).
 
     i = 0;
-    startLink = PTR_ADD_OFFSET(ldr, FIELD_OFFSET(PEB_LDR_DATA, InLoadOrderModuleList));
+    startLink = PTR_ADD_OFFSET(ldr, UFIELD_OFFSET(PEB_LDR_DATA, InLoadOrderModuleList));
     currentLink = pebLdrData.InLoadOrderModuleList.Flink;
 
     while (
@@ -503,11 +551,11 @@ NTSTATUS PhpEnumProcessModules(
         PVOID addressOfEntry;
 
         addressOfEntry = CONTAINING_RECORD(currentLink, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-        status = NtReadVirtualMemory(
+        status = PhReadVirtualMemory(
             ProcessHandle,
             addressOfEntry,
             &currentEntry,
-            dataTableEntrySize,
+            entrySize,
             NULL
             );
 
@@ -522,6 +570,7 @@ NTSTATUS PhpEnumProcessModules(
                 ProcessHandle,
                 &currentEntry,
                 addressOfEntry,
+                entrySize,
                 Context1,
                 Context2
                 ))
@@ -535,10 +584,12 @@ NTSTATUS PhpEnumProcessModules(
     return status;
 }
 
+_Function_class_(PH_ENUM_MODULES_CALLBACK)
 static BOOLEAN NTAPI PhpEnumProcessModulesCallback(
     _In_ HANDLE ProcessHandle,
     _In_ PLDR_DATA_TABLE_ENTRY Entry,
     _In_ PVOID AddressOfEntry,
+    _In_ ULONG SizeOfEntry,
     _In_ PVOID Context1,
     _In_ PVOID Context2
     )
@@ -583,7 +634,7 @@ static BOOLEAN NTAPI PhpEnumProcessModulesCallback(
         fullDllNameBuffer = PhAllocate(Entry->FullDllName.Length + sizeof(UNICODE_NULL));
         Entry->FullDllName.Buffer = fullDllNameBuffer;
 
-        if (NT_SUCCESS(status = NtReadVirtualMemory(
+        if (NT_SUCCESS(status = PhReadVirtualMemory(
             ProcessHandle,
             fullDllNameOriginal,
             fullDllNameBuffer,
@@ -620,7 +671,7 @@ static BOOLEAN NTAPI PhpEnumProcessModulesCallback(
             baseDllNameBuffer = PhAllocate(Entry->BaseDllName.Length + sizeof(UNICODE_NULL));
             Entry->BaseDllName.Buffer = baseDllNameBuffer;
 
-            if (NT_SUCCESS(NtReadVirtualMemory(
+            if (NT_SUCCESS(PhReadVirtualMemory(
                 ProcessHandle,
                 baseDllNameOriginal,
                 baseDllNameBuffer,
@@ -638,13 +689,13 @@ static BOOLEAN NTAPI PhpEnumProcessModulesCallback(
         }
     }
 
-    if (WindowsVersion >= WINDOWS_8 && Entry->DdagNode)
+    if (WindowsVersion >= WINDOWS_8 && Entry->DdagNode && RTL_CONTAINS_FIELD(Entry, SizeOfEntry, DdagNode))
     {
         LDR_DDAG_NODE ldrDagNode;
 
         memset(&ldrDagNode, 0, sizeof(LDR_DDAG_NODE));
 
-        if (NT_SUCCESS(NtReadVirtualMemory(
+        if (NT_SUCCESS(PhReadVirtualMemory(
             ProcessHandle,
             Entry->DdagNode,
             &ldrDagNode,
@@ -727,10 +778,12 @@ typedef struct _SET_PROCESS_MODULE_LOAD_COUNT_CONTEXT
     ULONG LoadCount;
 } SET_PROCESS_MODULE_LOAD_COUNT_CONTEXT, *PSET_PROCESS_MODULE_LOAD_COUNT_CONTEXT;
 
+_Function_class_(PH_ENUM_MODULES_CALLBACK)
 BOOLEAN NTAPI PhpSetProcessModuleLoadCountCallback(
     _In_ HANDLE ProcessHandle,
     _In_ PLDR_DATA_TABLE_ENTRY Entry,
     _In_ PVOID AddressOfEntry,
+    _In_ ULONG SizeOfEntry,
     _In_ PVOID Context1,
     _In_opt_ PVOID Context2
     )
@@ -739,7 +792,7 @@ BOOLEAN NTAPI PhpSetProcessModuleLoadCountCallback(
 
     if (Entry->DllBase == context->BaseAddress)
     {
-        context->Status = NtWriteVirtualMemory(
+        context->Status = PhWriteVirtualMemory(
             ProcessHandle,
             PTR_ADD_OFFSET(AddressOfEntry, FIELD_OFFSET(LDR_DATA_TABLE_ENTRY, ObsoleteLoadCount)),
             &context->LoadCount,
@@ -802,7 +855,7 @@ NTSTATUS PhpEnumProcessModules32(
     PEB_LDR_DATA32 pebLdrData;
     ULONG startLink; // LIST_ENTRY32 *32
     ULONG currentLink; // LIST_ENTRY32 *32
-    ULONG dataTableEntrySize;
+    ULONG entrySize;
     LDR_DATA_TABLE_ENTRY32 currentEntry;
     ULONG i;
 
@@ -813,7 +866,7 @@ NTSTATUS PhpEnumProcessModules32(
         return status;
 
     // Read the address of the loader data.
-    status = NtReadVirtualMemory(
+    status = PhReadVirtualMemory(
         ProcessHandle,
         PTR_ADD_OFFSET(peb, FIELD_OFFSET(PEB32, Ldr)),
         &ldr,
@@ -824,12 +877,11 @@ NTSTATUS PhpEnumProcessModules32(
     if (!NT_SUCCESS(status))
         return status;
 
-    // Check the process has initialized (dmex)
     if (!ldr)
         return STATUS_UNSUCCESSFUL;
 
     // Read the loader data.
-    status = NtReadVirtualMemory(
+    status = PhReadVirtualMemory(
         ProcessHandle,
         UlongToPtr(ldr),
         &pebLdrData,
@@ -840,15 +892,16 @@ NTSTATUS PhpEnumProcessModules32(
     if (!NT_SUCCESS(status))
         return status;
 
+    // Check the loader was initialized (dmex)
     if (!pebLdrData.Initialized)
         return STATUS_UNSUCCESSFUL;
 
     if (WindowsVersion >= WINDOWS_11)
-        dataTableEntrySize = LDR_DATA_TABLE_ENTRY_SIZE_WIN11_32;
+        entrySize = LDR_DATA_TABLE_ENTRY_SIZE_WIN11_32;
     else if (WindowsVersion >= WINDOWS_8)
-        dataTableEntrySize = LDR_DATA_TABLE_ENTRY_SIZE_WIN8_32;
+        entrySize = LDR_DATA_TABLE_ENTRY_SIZE_WIN8_32;
     else
-        dataTableEntrySize = LDR_DATA_TABLE_ENTRY_SIZE_WIN7_32;
+        entrySize = LDR_DATA_TABLE_ENTRY_SIZE_WIN7_32;
 
     // Traverse the linked list (in load order).
 
@@ -864,11 +917,11 @@ NTSTATUS PhpEnumProcessModules32(
         PVOID addressOfEntry;
 
         addressOfEntry = CONTAINING_RECORD(UlongToPtr(currentLink), LDR_DATA_TABLE_ENTRY32, InLoadOrderLinks);
-        status = NtReadVirtualMemory(
+        status = PhReadVirtualMemory(
             ProcessHandle,
             addressOfEntry,
             &currentEntry,
-            dataTableEntrySize,
+            entrySize,
             NULL
             );
 
@@ -883,6 +936,7 @@ NTSTATUS PhpEnumProcessModules32(
                 ProcessHandle,
                 &currentEntry,
                 addressOfEntry,
+                entrySize,
                 Context1,
                 Context2
                 ))
@@ -896,10 +950,12 @@ NTSTATUS PhpEnumProcessModules32(
     return status;
 }
 
+_Function_class_(PH_ENUM_MODULES_CALLBACK)
 BOOLEAN NTAPI PhpEnumProcessModules32Callback(
     _In_ HANDLE ProcessHandle,
     _In_ PLDR_DATA_TABLE_ENTRY32 Entry,
     _In_ PVOID AddressOfEntry,
+    _In_ ULONG SizeOfEntry,
     _In_ PVOID Context1,
     _In_opt_ PVOID Context2
     )
@@ -963,7 +1019,7 @@ BOOLEAN NTAPI PhpEnumProcessModules32Callback(
 
         baseDllNameBuffer = PhAllocate(nativeEntry.BaseDllName.Length + sizeof(UNICODE_NULL));
 
-        if (NT_SUCCESS(NtReadVirtualMemory(
+        if (NT_SUCCESS(PhReadVirtualMemory(
             ProcessHandle,
             nativeEntry.BaseDllName.Buffer,
             baseDllNameBuffer,
@@ -985,7 +1041,7 @@ BOOLEAN NTAPI PhpEnumProcessModules32Callback(
 
         fullDllNameBuffer = PhAllocate(nativeEntry.FullDllName.Length + sizeof(UNICODE_NULL));
 
-        if (NT_SUCCESS(NtReadVirtualMemory(
+        if (NT_SUCCESS(PhReadVirtualMemory(
             ProcessHandle,
             nativeEntry.FullDllName.Buffer,
             fullDllNameBuffer,
@@ -1060,11 +1116,11 @@ BOOLEAN NTAPI PhpEnumProcessModules32Callback(
         nativeEntry.FullDllName.Buffer = fullDllNameBuffer;
     }
 
-    if (WindowsVersion >= WINDOWS_8 && Entry->DdagNode)
+    if (WindowsVersion >= WINDOWS_8 && Entry->DdagNode && RTL_CONTAINS_FIELD(Entry, SizeOfEntry, DdagNode))
     {
         LDR_DDAG_NODE32 ldrDagNode32 = { 0 };
 
-        if (NT_SUCCESS(NtReadVirtualMemory(
+        if (NT_SUCCESS(PhReadVirtualMemory(
             ProcessHandle,
             UlongToPtr(Entry->DdagNode),
             &ldrDagNode32,
@@ -1148,10 +1204,12 @@ NTSTATUS PhEnumProcessModules32Ex(
         );
 }
 
+_Function_class_(PH_ENUM_MODULES_CALLBACK)
 static BOOLEAN NTAPI PhSetProcessModuleLoadCount32Callback(
     _In_ HANDLE ProcessHandle,
     _In_ PLDR_DATA_TABLE_ENTRY32 Entry,
     _In_ PVOID AddressOfEntry,
+    _In_ ULONG SizeOfEntry,
     _In_ PVOID Context1,
     _In_opt_ PVOID Context2
     )
@@ -1160,7 +1218,7 @@ static BOOLEAN NTAPI PhSetProcessModuleLoadCount32Callback(
 
     if (UlongToPtr(Entry->DllBase) == context->BaseAddress)
     {
-        context->Status = NtWriteVirtualMemory(
+        context->Status = PhWriteVirtualMemory(
             ProcessHandle,
             PTR_ADD_OFFSET(AddressOfEntry, FIELD_OFFSET(LDR_DATA_TABLE_ENTRY32, ObsoleteLoadCount)),
             &context->LoadCount,
@@ -1232,53 +1290,24 @@ ULONG PhGetRtlModuleType(
     return PH_MODULE_TYPE_MODULE;
 }
 
-PVOID PhGetRtlModuleBase(
-    _In_ PVOID DllBase,
-    _In_ ULONG Value
-    )
-{
-    // Note: 24H2 and above return zero for Dllbase resulting in hash collisions.
-    // Create a pseudo Dllbase based on the index with an invalid memory region
-    // greater than MaximumUserModeAddress or less than 0x1000. (dmex)
-
-    if (WindowsVersion >= WINDOWS_11_24H2 && !DllBase)
-    {
-        return PTR_SUB_OFFSET(ULONG64_MAX, Value);
-    }
-
-    return DllBase;
-}
-
-BOOLEAN PhIsRtlModuleBase(
-    _In_ PVOID DllBase
-    )
-{
-    if (WindowsVersion >= WINDOWS_11_24H2)
-        return DllBase >= PTR_SUB_OFFSET(ULONG64_MAX, USHRT_MAX);
-    return FALSE;
-}
-
+_Function_class_(PH_ENUM_PROCESS_MODULES_CALLBACK)
 static BOOLEAN EnumGenericProcessModulesCallback(
     _In_ PLDR_DATA_TABLE_ENTRY Module,
     _In_ PENUM_GENERIC_PROCESS_MODULES_CONTEXT Context
     )
 {
     PH_MODULE_INFO moduleInfo;
-    PVOID baseAddress;
     BOOLEAN result;
 
-    // Get the current module base address.
-    baseAddress = PhGetRtlModuleBase(Module->DllBase, Context->LoadOrderIndex);
-
     // Check if we have a duplicate base address.
-    if (PhFindEntryHashtable(Context->BaseAddressHashtable, &baseAddress))
+    if (PhFindEntryHashtable(Context->BaseAddressHashtable, &Module->DllBase))
         return TRUE;
 
-    PhAddEntryHashtable(Context->BaseAddressHashtable, &baseAddress);
+    PhAddEntryHashtable(Context->BaseAddressHashtable, &Module->DllBase);
 
     RtlZeroMemory(&moduleInfo, sizeof(PH_MODULE_INFO));
     moduleInfo.Type = Context->Type;
-    moduleInfo.BaseAddress = baseAddress;
+    moduleInfo.BaseAddress = Module->DllBase;
     moduleInfo.Size = Module->SizeOfImage;
     moduleInfo.EntryPoint = Module->EntryPoint;
     moduleInfo.Flags = Module->Flags;
@@ -1318,7 +1347,6 @@ VOID PhpRtlModulesToGenericModules(
     )
 {
     PRTL_PROCESS_MODULE_INFORMATION module;
-    PVOID baseAddress;
     PH_MODULE_INFO moduleInfo;
     BOOLEAN result;
 
@@ -1326,18 +1354,15 @@ VOID PhpRtlModulesToGenericModules(
     {
         module = &Modules->Modules[i];
 
-        // Get the current module base address.
-        baseAddress = PhGetRtlModuleBase(module->ImageBase, i);
-
         // Check if we have a duplicate base address.
-        if (PhFindEntryHashtable(BaseAddressHashtable, &baseAddress))
+        if (PhFindEntryHashtable(BaseAddressHashtable, &module->ImageBase))
             continue;
 
-        PhAddEntryHashtable(BaseAddressHashtable, &baseAddress);
+        PhAddEntryHashtable(BaseAddressHashtable, &module->ImageBase);
 
         RtlZeroMemory(&moduleInfo, sizeof(PH_MODULE_INFO));
-        moduleInfo.Type = PhGetRtlModuleType(baseAddress);
-        moduleInfo.BaseAddress = baseAddress;
+        moduleInfo.Type = PhGetRtlModuleType(module->ImageBase);
+        moduleInfo.BaseAddress = module->ImageBase;
         moduleInfo.Size = module->ImageSize;
         moduleInfo.EntryPoint = NULL;
         moduleInfo.Flags = module->Flags;
@@ -1384,23 +1409,19 @@ static VOID PhpRtlModulesExToGenericModules(
 {
     PRTL_PROCESS_MODULE_INFORMATION_EX module;
     PH_MODULE_INFO moduleInfo;
-    PVOID baseAddress;
     BOOLEAN result;
 
-    for (module = Modules; module->NextOffset; module = PTR_ADD_OFFSET(module, module->NextOffset))
+    for (module = Modules; module->NextOffset; module = RTL_PTR_ADD(module, module->NextOffset))
     {
-        // Get the current module base address.
-        baseAddress = PhGetRtlModuleBase(module->ImageBase, module->LoadOrderIndex);
-
         // Check if we have a duplicate base address.
-        if (PhFindEntryHashtable(BaseAddressHashtable, &baseAddress))
+        if (PhFindEntryHashtable(BaseAddressHashtable, &module->ImageBase))
             continue;
 
-        PhAddEntryHashtable(BaseAddressHashtable, &baseAddress);
+        PhAddEntryHashtable(BaseAddressHashtable, &module->ImageBase);
 
         RtlZeroMemory(&moduleInfo, sizeof(PH_MODULE_INFO));
-        moduleInfo.Type = PhGetRtlModuleType(baseAddress);
-        moduleInfo.BaseAddress = baseAddress;
+        moduleInfo.Type = PhGetRtlModuleType(module->ImageBase);
+        moduleInfo.BaseAddress = module->ImageBase;
         moduleInfo.Size = module->ImageSize;
         moduleInfo.EntryPoint = NULL;
         moduleInfo.Flags = module->Flags;
@@ -1854,6 +1875,7 @@ typedef struct _PH_ENUM_PROCESS_MODULES_LIMITED_PARAMETERS
     PVOID Context;
 } PH_ENUM_PROCESS_MODULES_LIMITED_PARAMETERS, *PPH_ENUM_PROCESS_MODULES_LIMITED_PARAMETERS;
 
+_Function_class_(PH_ENUM_MEMORY_PAGE_CALLBACK)
 static NTSTATUS NTAPI PhEnumProcessModulesLimitedCallback(
     _In_ HANDLE ProcessHandle,
     _In_ ULONG_PTR NumberOfEntries,
@@ -1987,7 +2009,7 @@ NTSTATUS PhEnumProcessEnclaveModules(
 
         entryAddress = CONTAINING_RECORD(link, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
 
-        status = NtReadVirtualMemory(
+        status = PhReadVirtualMemory(
             ProcessHandle,
             entryAddress,
             &entry,
@@ -2033,7 +2055,7 @@ NTSTATUS PhGetProcessLdrTableEntryNames(
     {
         fullDllName = PhAllocate(Entry->FullDllName.Length);
 
-        status = NtReadVirtualMemory(
+        status = PhReadVirtualMemory(
             ProcessHandle,
             Entry->FullDllName.Buffer,
             fullDllName,

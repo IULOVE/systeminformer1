@@ -144,12 +144,14 @@ NTSTATUS PhBaseInitialization(
     PhStringType = PhCreateObjectType(L"String", 0, NULL);
     PhBytesType = PhCreateObjectType(L"Bytes", 0, NULL);
 
+    memset(&parameters, 0, sizeof(PH_OBJECT_TYPE_PARAMETERS));
     parameters.FreeListSize = sizeof(PH_LIST);
     parameters.FreeListCount = 128;
 
     PhListType = PhCreateObjectTypeEx(L"List", PH_OBJECT_TYPE_USE_FREE_LIST, PhpListDeleteProcedure, &parameters);
     PhPointerListType = PhCreateObjectType(L"PointerList", 0, PhpPointerListDeleteProcedure);
 
+    memset(&parameters, 0, sizeof(PH_OBJECT_TYPE_PARAMETERS));
     parameters.FreeListSize = sizeof(PH_HASHTABLE);
     parameters.FreeListCount = 64;
 
@@ -183,6 +185,7 @@ NTSTATUS PhpBaseThreadStart(
     PhFreeToFreeList(&PhpBaseThreadContextFreeList, Parameter);
 
 #ifdef DEBUG
+    memset(&dbg, 0, sizeof(PHP_BASE_THREAD_DBG));
     dbg.ClientId = NtCurrentTeb()->ClientId;
     dbg.StartAddress = context.StartAddress;
     dbg.Parameter = context.Parameter;
@@ -444,6 +447,7 @@ NTSTATUS PhCreateThread2(
     return status;
 }
 
+_Function_class_(TP_CALLBACK_ROUTINE)
 VOID PhpBaseThreadQueueStart(
     _Inout_ PTP_CALLBACK_INSTANCE Instance,
     _In_ _Frees_ptr_ PVOID Context
@@ -490,36 +494,99 @@ NTSTATUS PhQueueUserWorkItem(
 }
 
 /**
+ *  Calibrate and return TSC frequency in Hz (cycles per second)
+ *
+ *  Example usage:
+ *  double tsc_freq = PhReadTimeStampFrequency();
+ *  dprintf("TSC frequency: %.3f MHz\n", tsc_freq / 1e6);
+ *  // Example: measure a code region
+ *  _mm_lfence();
+ *  uint64_t t0 = __rdtsc();
+ *  // ... code to measure ...
+ *  for (volatile int i = 0; i < 1000000; ++i) {}
+ *  _mm_lfence();
+ *  uint64_t t1 = __rdtsc();
+ *  uint64_t cycles = t1 - t0;
+ *  double seconds = (double)cycles / tsc_freq;
+ *  double nanoseconds = seconds * 1e9;
+ *  dprintf("Elapsed: %llu cycles, %.6f seconds, %.0f ns\n", cycles, seconds, nanoseconds);
+ **/
+DOUBLE PhReadTimeStampFrequency(
+    VOID
+    )
+{
+    LARGE_INTEGER qpc_freq;
+    LARGE_INTEGER qpc_start;
+    LARGE_INTEGER qpc_end;
+    ULONG_PTR old_affinity = 0;
+    DOUBLE elapsed_qpc;
+    ULONG64 elapsed_tsc;
+    DOUBLE tsc_freq;
+    ULONG64 tsc_start;
+    ULONG64 tsc_end;
+
+    PhQueryPerformanceFrequency(&qpc_freq);
+
+    // Wait interval (in QPC ticks)
+    const DOUBLE interval_sec = 0.1; // 100 ms
+    const LONGLONG interval_ticks = (LONGLONG)(qpc_freq.QuadPart * interval_sec);
+
+    // Warm up
+    for (volatile int i = 0; i < 1000000; ++i) {}
+
+    // Pin thread to one CPU (optional, for best accuracy)
+    PhGetThreadAffinityMask(NtCurrentThread(), &old_affinity);
+    PhSetThreadAffinityMask(NtCurrentThread(), 1);
+
+    PhQueryPerformanceCounter(&qpc_start);
+    SpeculationFence();
+    tsc_start = ReadTimeStampCounter();
+    SpeculationFence();
+
+    // Wait for interval
+    do
+    {
+        PhQueryPerformanceCounter(&qpc_end);
+    } while ((qpc_end.QuadPart - qpc_start.QuadPart) < interval_ticks);
+
+    SpeculationFence();
+    tsc_end = ReadTimeStampCounter();
+    SpeculationFence();
+
+    if (old_affinity)
+    {
+        PhSetThreadAffinityMask(NtCurrentThread(), old_affinity);
+    }
+
+    elapsed_qpc = (DOUBLE)(qpc_end.QuadPart - qpc_start.QuadPart) / qpc_freq.QuadPart;
+    elapsed_tsc = tsc_end - tsc_start;
+    tsc_freq = elapsed_tsc / elapsed_qpc;
+    return tsc_freq;
+}
+
+/**
  * Reads the time stamp counter.
  *
  * This function reads the time stamp counter using the `__rdtscp` instruction,
  * which is a serializing variant of the `rdtsc` instruction. It also includes
  * a memory fence to ensure proper ordering of memory operations.
- * @return The current value of the time stamp counter.
+ * \return The current value of the time stamp counter.
  */
-ULONGLONG PhReadTimeStampCounter(
+ULONG64 PhReadTimeStampCounter(
     VOID
     )
 {
-#if defined(PHNT_NATIVE_TIME)
-    ULONG64 value;
-
-    value = ReadTimeStampCounter();
-
-#if !defined(NTDDI_WIN11_GE) || (NTDDI_VERSION < NTDDI_WIN11_GE)
-    MemoryBarrier();
+#if defined(_M_X64) || defined(_M_IX86)
+    unsigned int aux;
+    ULONG64 value = __rdtscp(&aux);
+    SpeculationFence();
+    return value;
 #else
     SpeculationFence();
-#endif
-
-#else
-    ULONG64 value;
-    ULONG index;
-
-    value = __rdtscp(&index);
-#endif
-
+    ULONG64 value = ReadTimeStampCounter();
+    SpeculationFence();
     return value;
+#endif
 }
 
 // rev from QueryPerformanceCounter (dmex)
@@ -967,10 +1034,10 @@ PVOID PhReAllocateSafe(
     }
     if (Memory)
     {
-        return RtlReAllocateHeap(PhHeapHandle, HEAP_GENERATE_EXCEPTIONS, Memory, Size);
+        return RtlReAllocateHeap(PhHeapHandle, 0, Memory, Size);
     }
 
-    return RtlAllocateHeap(PhHeapHandle, HEAP_GENERATE_EXCEPTIONS, Size);
+    return RtlAllocateHeap(PhHeapHandle, 0, Size);
 #endif
 }
 
@@ -1236,11 +1303,11 @@ NTSTATUS PhProtectVirtualMemory(
 /**
  * Reads virtual memory from a specified process.
  *
- * @param ProcessHandle Handle to the process from which the memory is to be read.
- * @param BaseAddress Optional pointer to the base address in the specified process from which to read.
- * @param Buffer Pointer to a buffer that receives the contents from the address space of the specified process.
- * @param BufferSize Size of the buffer, in bytes.
- * @param NumberOfBytesRead Optional pointer to a variable that receives the number of bytes read into the buffer.
+ * \param ProcessHandle Handle to the process from which the memory is to be read.
+ * \param BaseAddress Optional pointer to the base address in the specified process from which to read.
+ * \param Buffer Pointer to a buffer that receives the contents from the address space of the specified process.
+ * \param BufferSize Size of the buffer, in bytes.
+ * \param NumberOfBytesRead Optional pointer to a variable that receives the number of bytes read into the buffer.
  * \return Successful or errant status.
  */
 NTSTATUS PhReadVirtualMemory(
@@ -1258,14 +1325,70 @@ NTSTATUS PhReadVirtualMemory(
             *NumberOfBytesRead = BufferSize;
         return STATUS_SUCCESS;
     }
+    NTSTATUS status;
+    SIZE_T numberOfBytesRead = 0;
 
-    return NtReadVirtualMemory(
+    status = NtReadVirtualMemory(
         ProcessHandle,
         BaseAddress,
         Buffer,
         BufferSize,
-        NumberOfBytesRead
+        &numberOfBytesRead
         );
+
+    if (NT_SUCCESS(status))
+    {
+        assert(BufferSize == numberOfBytesRead);
+    }
+
+    if (NumberOfBytesRead)
+    {
+        *NumberOfBytesRead = numberOfBytesRead;
+    }
+
+    return status;
+}
+
+/**
+ * Writes virtual memory to the specified process.
+ *
+ * \param ProcessHandle Handle to the process from which the memory is to be read.
+ * \param BaseAddress Optional pointer to the base address in the specified process from which to read.
+ * \param Buffer Pointer to a buffer that receives the contents from the address space of the specified process.
+ * \param NumberOfBytesToWrite The number of bytes to be written to the specified process.
+ * \param NumberOfBytesWritten A pointer to a variable that receives the number of bytes transferred into the specified buffer.
+ * \return Successful or errant status.
+ */
+NTSTATUS PhWriteVirtualMemory(
+    _In_ HANDLE ProcessHandle,
+    _In_opt_ PVOID BaseAddress,
+    _In_reads_bytes_(NumberOfBytesToWrite) PVOID Buffer,
+    _In_ SIZE_T NumberOfBytesToWrite,
+    _Out_opt_ PSIZE_T NumberOfBytesWritten
+    )
+{
+    NTSTATUS status;
+    SIZE_T numberOfBytesWritten = 0;
+
+    status = NtWriteVirtualMemory(
+        ProcessHandle,
+        BaseAddress,
+        Buffer,
+        NumberOfBytesToWrite,
+        &numberOfBytesWritten
+        );
+
+    if (NT_SUCCESS(status))
+    {
+        assert(NumberOfBytesToWrite == numberOfBytesWritten);
+    }
+
+    if (NumberOfBytesWritten)
+    {
+        *NumberOfBytesWritten = numberOfBytesWritten;
+    }
+
+    return status;
 }
 
 /**
@@ -4881,7 +5004,6 @@ VOID PhDeleteBytesBuilder(
  * resources used by the object.
  *
  * \param BytesBuilder A byte string builder object.
- *
  * \return A pointer to a byte string. You must free the byte string using PhDereferenceObject()
  * when you no longer need it.
  */
@@ -7406,10 +7528,13 @@ VOID PhFillMemoryUlong(
     _In_ SIZE_T Count
     )
 {
+    if (Count == 0)
+        return;
+
 #ifndef _ARM64_
     if (PhHasAVX)
     {
-        SIZE_T count = Count & ~0x1F;
+        SIZE_T count = Count & ~0x7;
 
         if (count != 0)
         {
@@ -7425,14 +7550,14 @@ VOID PhFillMemoryUlong(
                 Memory += 8;
             }
 
-            Count &= 0x1F;
+            Count &= 0x7;
         }
     }
 #endif
 
     if (PhHasIntrinsics)
     {
-        SIZE_T count = Count & ~0xF;
+        SIZE_T count = Count & ~0x3;
 
         if (count != 0)
         {
@@ -7448,7 +7573,7 @@ VOID PhFillMemoryUlong(
                 Memory += 4;
             }
 
-            Count &= 0xF;
+            Count &= 0x3;
         }
     }
 
@@ -7548,10 +7673,19 @@ VOID PhDivideSinglesBySingle(
     _In_ SIZE_T Count
     )
 {
+    if (Count == 0)
+        return;
+    if (B == 1.0f || B == 0.0f)
+        return;
+
+    // Note: This uses reciprocal multiply since it's faster than per-element divides
+    // and preserves IEEE-754 behavior for +/-0, +/-INF, and NaN (0/0 -> NaN, x/0 -> +/-INF). (dmex)
+    const FLOAT invB = 1.0f / B;
+
 #ifndef _ARM64_
     if (PhHasAVX)
     {
-        SIZE_T count = Count & ~0x1F;
+        SIZE_T count = Count & ~0x7;
 
         if (count != 0)
         {
@@ -7560,25 +7694,25 @@ VOID PhDivideSinglesBySingle(
             __m256 b;
 
             end = (PFLOAT)(ULONG_PTR)(A + count);
-            b = _mm256_broadcast_ss(&B);
+            b = _mm256_set1_ps(invB); // _mm256_broadcast_ss(&B);
 
             while (A != end)
             {
                 a = _mm256_load_ps(A);
-                a = _mm256_div_ps(a, b);
+                a = _mm256_mul_ps(a, b); // _mm256_div_ps(a, b);
                 _mm256_store_ps(A, a);
 
                 A += 8;
             }
 
-            Count &= 0x1F;
+            Count &= 0x7;
         }
     }
 #endif
 
     if (PhHasIntrinsics)
     {
-        SIZE_T count = Count & ~0xF;
+        SIZE_T count = Count & ~0x3;
 
         if (count != 0)
         {
@@ -7586,30 +7720,25 @@ VOID PhDivideSinglesBySingle(
             PH_FLOAT128 a;
             PH_FLOAT128 b;
 
-            end = (PFLOAT)(ULONG_PTR)(A + count);
-            b = PhSetFLOAT128by32(B);
+            end = A + count;
+            b = PhSetFLOAT128by32(invB); // PhSetFLOAT128by32(B);
 
             while (A != end)
             {
                 a = PhLoadFLOAT128(A);
-                a = PhDivideFLOAT128(a, b);
+                a = PhMultiplyFLOAT128(a, b); // PhDivideFLOAT128(a, b);
                 PhStoreFLOAT128(A, a);
 
                 A += 4;
             }
 
-            Count &= 0xF;
+            Count &= 0x3;
         }
     }
 
-    if (Count != 0)
+    while (Count--)
     {
-        PFLOAT end = (PFLOAT)(ULONG_PTR)(A + Count);
-
-        while (A != end)
-        {
-            *A++ /= B;
-        }
+        *A++ *= invB;
     }
 }
 
@@ -7682,10 +7811,13 @@ FLOAT PhMaxMemorySingles(
 {
     FLOAT maximum = 0.0f;
 
+    if (Count == 0)
+        return maximum;
+
 #ifndef _ARM64_
     if (PhHasAVX)
     {
-        SIZE_T count = Count & ~0x1F;
+        SIZE_T count = Count & ~0x7;
 
         if (count != 0)
         {
@@ -7710,14 +7842,14 @@ FLOAT PhMaxMemorySingles(
             c = _mm256_max_ps(c, _mm256_permute2f128_ps(c, c, 1));
             maximum = _mm256_cvtss_f32(c);
 
-            Count &= 0x1F;
+            Count &= 0x7;
         }
     }
 #endif
 
     if (PhHasIntrinsics)
     {
-        SIZE_T count = Count & ~0xF;
+        SIZE_T count = Count & ~0x3;
 
         if (count != 0)
         {
@@ -7745,7 +7877,7 @@ FLOAT PhMaxMemorySingles(
             if (maximum < value)
                 maximum = value;
 
-            Count &= 0xF;
+            Count &= 0x3;
         }
     }
 
@@ -7777,10 +7909,13 @@ FLOAT PhAddPlusMaxMemorySingles(
 {
     FLOAT maximum = 0.0f;
 
+    if (Count == 0)
+        return maximum;
+
 #ifndef _ARM64_
     if (PhHasAVX)
     {
-        SIZE_T count = Count & ~0x1F;
+        SIZE_T count = Count & ~0x7;
 
         if (count != 0)
         {
@@ -7809,14 +7944,14 @@ FLOAT PhAddPlusMaxMemorySingles(
             c = _mm256_max_ps(c, _mm256_permute2f128_ps(c, c, 1));
             maximum = _mm256_cvtss_f32(c);
 
-            Count &= 0x1F;
+            Count &= 0x7;
         }
     }
 #endif
 
     if (PhHasIntrinsics)
     {
-        SIZE_T count = Count & ~0xF;
+        SIZE_T count = Count & ~0x3;
 
         if (count != 0)
         {
@@ -7848,7 +7983,7 @@ FLOAT PhAddPlusMaxMemorySingles(
             if (maximum < value)
                 maximum = value;
 
-            Count &= 0xF;
+            Count &= 0x3;
         }
     }
 
@@ -7876,10 +8011,13 @@ VOID PhConvertCopyMemoryUlong(
     _In_ SIZE_T Count
     )
 {
+    if (Count == 0)
+        return;
+
 #ifndef _ARM64_
     if (PhHasAVX)
     {
-        SIZE_T count = Count & ~0x1F;
+        SIZE_T count = Count & ~0x7;
 
         if (count != 0)
         {
@@ -7899,14 +8037,14 @@ VOID PhConvertCopyMemoryUlong(
                 To += 8;
             }
 
-            Count &= 0x1F;
+            Count &= 0x7;
         }
     }
 #endif
 
     if (PhHasIntrinsics)
     {
-        SIZE_T count = Count & ~0xF;
+        SIZE_T count = Count & ~0x3;
 
         if (count != 0)
         {
@@ -7926,7 +8064,7 @@ VOID PhConvertCopyMemoryUlong(
                 To += 4;
             }
 
-            Count &= 0xF;
+            Count &= 0x3;
         }
     }
 
@@ -7935,6 +8073,84 @@ VOID PhConvertCopyMemoryUlong(
         *To++ = (FLOAT)*From++;
     }
 }
+
+/**
+ * \brief Converts an array of 64-bit unsigned integers to floats.
+ *
+ * \param From The source 64-bit integers.
+ * \param To The destination floats.
+ * \param Count The number of elements.
+ */
+VOID PhConvertCopyMemoryUlong64(
+    _Inout_updates_(Count) PULONG64 From,
+    _Inout_updates_(Count) PFLOAT To,
+    _In_ SIZE_T Count
+    )
+{
+    if (Count == 0)
+        return;
+
+#ifndef _ARM64_
+    if(PhHasAVX)
+    {
+        SIZE_T count = Count & ~0x3;
+
+        if (count)
+        {
+            PULONG64 end = From + count;
+            const __m256i MaskLo32_64 = _mm256_set1_epi64x(0xFFFFFFFFULL); // for AND on 64-bit lanes
+            const __m256i PackIdx = _mm256_setr_epi32(0, 2, 4, 6, 0, 0, 0, 0);  // take elements 0,2,4,6 into lower 128
+            const __m128  Ps2p31 = _mm_set1_ps(2147483648.0f); // 2^31
+            const __m128  Ps2p32 = _mm_set1_ps(4294967296.0f); // 2^32 (exact power of two)
+            const __m128i Mask7fffffff = _mm_set1_epi32(0x7FFFFFFF);
+
+            while (From != end)
+            {
+                // Load 4x uint64_t (256 bits)
+                __m256i v = _mm256_loadu_si256((__m256i const*)From);
+
+                // Split each 64-bit lane into its low/high 32-bit halves (still in 64-bit lanes)
+                __m256i lo32_64 = _mm256_and_si256(v, MaskLo32_64);   // [u0_lo,0, u1_lo,0, u2_lo,0, u3_lo,0]
+                __m256i hi32_64 = _mm256_srli_epi64(v, 32);           // [u0_hi,0, u1_hi,0, u2_hi,0, u3_hi,0]
+
+                // Pack 32-bit elements (indices 0,2,4,6) into lower 128 as contiguous 4x int32
+                __m256i loPacked = _mm256_permutevar8x32_epi32(lo32_64, PackIdx);
+                __m256i hiPacked = _mm256_permutevar8x32_epi32(hi32_64, PackIdx);
+
+                __m128i lo128 = _mm256_castsi256_si128(loPacked); // [u0_lo, u1_lo, u2_lo, u3_lo]
+                __m128i hi128 = _mm256_castsi256_si128(hiPacked); // [u0_hi, u1_hi, u2_hi, u3_hi]
+
+                // Convert unsigned 32 -> float:
+                //   f = float(x & 0x7fffffff) + float(x >> 31) * 2^31
+                __m128i loCarryI = _mm_srli_epi32(lo128, 31);
+                __m128  loPs = _mm_cvtepi32_ps(_mm_and_si128(lo128, Mask7fffffff));
+                loPs = _mm_add_ps(loPs, _mm_mul_ps(_mm_cvtepi32_ps(loCarryI), Ps2p31));
+
+                __m128i hiCarryI = _mm_srli_epi32(hi128, 31);
+                __m128  hiPs = _mm_cvtepi32_ps(_mm_and_si128(hi128, Mask7fffffff));
+                hiPs = _mm_add_ps(hiPs, _mm_mul_ps(_mm_cvtepi32_ps(hiCarryI), Ps2p31));
+
+                // Reconstruct: float(u64) = float(low32) + float(high32) * 2^32
+                // (Use FMA if you dispatch it)
+                __m128 val = _mm_add_ps(loPs, _mm_mul_ps(hiPs, Ps2p32));
+
+                _mm_storeu_ps(To, val); // store exactly 4 floats
+
+                From += 4;
+                To   += 4;
+            }
+
+            Count &= 0x3;
+        }
+    }
+#endif
+
+    while (Count--)
+    {
+        *To++ = (FLOAT)*From++;
+    }
+}
+
 
 /**
  * \brief Converts an array of floats to integers.
@@ -7949,37 +8165,40 @@ VOID PhConvertCopyMemorySingles(
     _In_ SIZE_T Count
     )
 {
+    if (Count == 0)
+        return;
+
 #ifndef _ARM64_
     if (PhHasAVX)
     {
-        SIZE_T count = Count & ~0x1F;
+        SIZE_T count = Count & ~0x7;
 
         if (count != 0)
         {
-            PFLOAT end;
+            PFLOAT end = From + count;
+
             __m256 a;
             __m256i b;
-
-            end = (PFLOAT)(ULONG_PTR)(From + count);
 
             while (From != end)
             {
                 a = _mm256_load_ps(From);
-                b = _mm256_cvtps_epi32(a); // _mm256_cvtps_epu32
+                // Truncate toward zero to match scalar (C cast) semantics.
+                b = _mm256_cvttps_epi32(a); // _mm256_cvtps_epi32 // _mm256_cvtps_epu32
                 _mm256_store_si256((__m256i*)To, b);
 
                 From += 8;
                 To += 8;
             }
 
-            Count &= 0x1F;
+            Count &= 0x7;
         }
     }
 #endif
 
     if (PhHasIntrinsics)
     {
-        SIZE_T count = Count & ~0xF;
+        SIZE_T count = Count & ~0x3;
 
         if (count != 0)
         {
@@ -7999,7 +8218,7 @@ VOID PhConvertCopyMemorySingles(
                 To += 4;
             }
 
-            Count &= 0xF;
+            Count &= 0x3;
         }
     }
 
@@ -8035,6 +8254,34 @@ VOID PhCopyConvertCircularBufferULONG(
         // Convert and copy the tail, then only part of the head.
         PhConvertCopyMemoryUlong(&Buffer->Data[Buffer->Index], Destination, tailSize);
         PhConvertCopyMemoryUlong(Buffer->Data, &Destination[tailSize], (Count - tailSize));
+    }
+}
+
+VOID PhCopyConvertCircularBufferULONG64(
+    _Inout_ PPH_CIRCULAR_BUFFER_ULONG64 Buffer,
+    _Out_writes_(Count) FLOAT* Destination,
+    _In_ ULONG Count
+    )
+{
+    ULONG tailSize;
+    ULONG headSize;
+
+    tailSize = (ULONG)(Buffer->Size - Buffer->Index);
+    headSize = Buffer->Count - tailSize;
+
+    if (Count > Buffer->Count)
+        Count = Buffer->Count;
+
+    if (tailSize >= Count)
+    {
+        // Convert and copy only a part of the tail.
+        PhConvertCopyMemoryUlong64(&Buffer->Data[Buffer->Index], Destination, Count);
+    }
+    else
+    {
+        // Convert and copy the tail, then only part of the head.
+        PhConvertCopyMemoryUlong64(&Buffer->Data[Buffer->Index], Destination, tailSize);
+        PhConvertCopyMemoryUlong64(Buffer->Data, &Destination[tailSize], (Count - tailSize));
     }
 }
 

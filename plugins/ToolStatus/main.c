@@ -42,23 +42,13 @@ HMENU MainMenu = NULL;
 HACCEL AcceleratorTable = NULL;
 ULONG_PTR SearchMatchHandle = 0;
 ULONG RestoreSearchSelectedProcessId = ULONG_MAX;
+PPH_TREENEW_NODE RestoreSearchSelectedNode = NULL;
+HWND RestoreSearchTreeHandle = NULL;
 PH_PLUGIN_SYSTEM_STATISTICS SystemStatistics = { 0 };
-PH_CALLBACK_DECLARE(SearchChangedEvent);
-PPH_HASHTABLE TabInfoHashtable;
 PPH_TN_FILTER_ENTRY ProcessTreeFilterEntry = NULL;
 PPH_TN_FILTER_ENTRY ServiceTreeFilterEntry = NULL;
 PPH_TN_FILTER_ENTRY NetworkTreeFilterEntry = NULL;
 PPH_PLUGIN PluginInstance = NULL;
-TOOLSTATUS_INTERFACE PluginInterface =
-{
-    TOOLSTATUS_INTERFACE_VERSION,
-    GetSearchMatchHandle,
-    WordMatchStringRef,
-    RegisterTabSearch,
-    &SearchChangedEvent,
-    RegisterTabInfo,
-    ToolbarRegisterGraph
-};
 
 static ULONG TargetingMode = 0;
 static BOOLEAN TargetingWindow = FALSE;
@@ -77,13 +67,6 @@ static PH_CALLBACK_REGISTRATION TabPageCallbackRegistration;
 static PH_CALLBACK_REGISTRATION ProcessTreeNewInitializingCallbackRegistration;
 static PH_CALLBACK_REGISTRATION ServiceTreeNewInitializingCallbackRegistration;
 static PH_CALLBACK_REGISTRATION NetworkTreeNewInitializingCallbackRegistration;
-
-ULONG_PTR GetSearchMatchHandle(
-    VOID
-    )
-{
-    return SearchMatchHandle;
-}
 
 _Function_class_(PH_CALLBACK_FUNCTION)
 VOID NTAPI ProcessesUpdatedCallback(
@@ -119,80 +102,21 @@ VOID NTAPI TreeNewInitializingCallback(
     }
 }
 
-VOID RegisterTabSearch(
-    _In_ INT TabIndex,
-    _In_ PWSTR BannerText
-    )
-{
-    PTOOLSTATUS_TAB_INFO tabInfo;
-
-    tabInfo = RegisterTabInfo(TabIndex);
-    tabInfo->BannerText = BannerText;
-}
-
-PTOOLSTATUS_TAB_INFO RegisterTabInfo(
-    _In_ INT TabIndex
-    )
-{
-    PTOOLSTATUS_TAB_INFO tabInfoCopy;
-    PVOID *entry;
-
-    tabInfoCopy = PhCreateAlloc(sizeof(TOOLSTATUS_TAB_INFO));
-    memset(tabInfoCopy, 0, sizeof(TOOLSTATUS_TAB_INFO));
-
-    if (!PhAddItemSimpleHashtable(TabInfoHashtable, IntToPtr(TabIndex), tabInfoCopy))
-    {
-        PhClearReference(&tabInfoCopy);
-
-        if (entry = PhFindItemSimpleHashtable(TabInfoHashtable, IntToPtr(TabIndex)))
-            tabInfoCopy = *entry;
-    }
-
-    return tabInfoCopy;
-}
-
-PTOOLSTATUS_TAB_INFO FindTabInfo(
-    _In_ INT TabIndex
-    )
-{
-    PVOID *entry;
-
-    if (entry = PhFindItemSimpleHashtable(TabInfoHashtable, IntToPtr(TabIndex)))
-        return *entry;
-
-    return NULL;
-}
-
 HWND GetCurrentTreeNewHandle(
     VOID
     )
 {
-    HWND treeNewHandle = NULL;
-
     switch (SelectedTabIndex)
     {
     case 0:
-        treeNewHandle = ProcessTreeNewHandle;
-        break;
+        return ProcessTreeNewHandle;
     case 1:
-        treeNewHandle = ServiceTreeNewHandle;
-        break;
+        return ServiceTreeNewHandle;
     case 2:
-        treeNewHandle = NetworkTreeNewHandle;
-        break;
-    default:
-        {
-            PTOOLSTATUS_TAB_INFO tabInfo;
-
-            if ((tabInfo = FindTabInfo(SelectedTabIndex)) && tabInfo->GetTreeNewHandle)
-            {
-                treeNewHandle = tabInfo->GetTreeNewHandle();
-            }
-        }
-        break;
+        return NetworkTreeNewHandle;
     }
 
-    return treeNewHandle;
+    return GetTabIndexTreeNewHandle(SelectedTabIndex);
 }
 
 VOID ShowCustomizeMenu(
@@ -206,7 +130,8 @@ VOID ShowCustomizeMenu(
     PPH_EMENU_ITEM lockMenuItem;
     PPH_EMENU_ITEM selectedItem;
 
-    GetCursorPos(&cursorPos);
+    if (!PhGetMessagePos(&cursorPos))
+        return;
 
     menu = PhCreateEMenu();
     PhInsertEMenuItem(menu, mainMenuItem = PhCreateEMenuItem(0, COMMAND_ID_ENABLE_MENU, L"Main menu (auto-hide)", NULL, NULL), ULONG_MAX);
@@ -274,10 +199,11 @@ VOID ShowCustomizeMenu(
             break;
         case COMMAND_ID_TOOLBAR_LOCKUNLOCK:
             {
-                UINT bandCount;
-                UINT bandIndex;
+                ULONG bandCount;
+                ULONG bandIndex;
 
-                bandCount = (UINT)SendMessage(RebarHandle, RB_GETBANDCOUNT, 0, 0);
+                if (!RebarGetBandCount(&bandCount))
+                    break;
 
                 for (bandIndex = 0; bandIndex < bandCount; bandIndex++)
                 {
@@ -327,16 +253,7 @@ VOID ShowCustomizeMenu(
             break;
         case COMMAND_ID_GRAPHS_CUSTOMIZE:
             {
-                PPH_TOOLBAR_GRAPH icon;
-
-                if (!selectedItem->Context)
-                    break;
-
-                icon = selectedItem->Context;
-                ToolbarSetVisibleGraph(icon, !(icon->Flags & PH_NF_ICON_ENABLED));
-
-                ToolbarGraphSaveSettings();
-                ReBarSaveLayoutSettings();
+                ToolbarUpdateVisibleGraph(selectedItem->Context);
             }
             break;
         }
@@ -351,7 +268,7 @@ VOID NTAPI TabPageUpdatedCallback(
     _In_opt_ PVOID Context
     )
 {
-    INT tabIndex = PtrToInt(Parameter);
+    LONG tabIndex = PtrToLong(Parameter);
 
     SelectedTabIndex = tabIndex;
 
@@ -371,17 +288,11 @@ VOID NTAPI TabPageUpdatedCallback(
         break;
     default:
         {
-            PTOOLSTATUS_TAB_INFO tabInfo;
+            static CONST PH_STRINGREF string = PH_STRINGREF_INIT(L" (Ctrl+K)");
+            PPH_STRING text;
 
-            if ((tabInfo = FindTabInfo(tabIndex)) && tabInfo->BannerText)
-            {
-                Edit_SetCueBannerText(SearchboxHandle, PhaConcatStrings2(tabInfo->BannerText, L" (Ctrl+K)")->Buffer);
-            }
-            else
-            {
-                // Disable the textbox if we're on an unsupported tab.
-                Edit_SetCueBannerText(SearchboxHandle, L"Search disabled");
-            }
+            text = PH_AUTO_T(PH_STRING, GetTabIndexBannerText(tabIndex, &string));
+            Edit_SetCueBannerText(SearchboxHandle, PhGetStringOrDefault(text, L"Search disabled"));
         }
         break;
     }
@@ -404,10 +315,11 @@ VOID NTAPI LayoutPaddingCallback(
 
         SendMessage(RebarHandle, WM_SIZE, 0, 0);
 
-        GetClientRect(RebarHandle, &rebarRect);
-
-        // Adjust the PH client area and exclude the rebar width.
-        layoutPadding->Padding.top += rebarRect.bottom;
+        if (PhGetClientRect(RebarHandle, &rebarRect))
+        {
+            // Adjust the PH client area and exclude the rebar width.
+            layoutPadding->Padding.top += rebarRect.bottom;
+        }
 
         // TODO: Replace CCS_TOP with CCS_NOPARENTALIGN and use below code
         //switch (RebarDisplayLocation)
@@ -491,10 +403,11 @@ VOID NTAPI LayoutPaddingCallback(
 
         SendMessage(StatusBarHandle, WM_SIZE, 0, 0);
 
-        GetClientRect(StatusBarHandle, &statusBarRect);
-
-        // Adjust the PH client area and exclude the StatusBar width.
-        layoutPadding->Padding.bottom += statusBarRect.bottom;
+        if (PhGetClientRect(StatusBarHandle, &statusBarRect))
+        {
+            // Adjust the PH client area and exclude the StatusBar width.
+            layoutPadding->Padding.bottom += statusBarRect.bottom;
+        }
 
         //InvalidateRect(StatusBarHandle, NULL, TRUE);
     }
@@ -674,7 +587,9 @@ VOID DrawWindowBorderForTargeting(
     HDC hdc;
     LONG dpiValue;
 
-    GetWindowRect(hWnd, &rect);
+    if (!PhGetWindowRect(hWnd, &rect))
+        return;
+
     hdc = GetWindowDC(hWnd);
 
     if (hdc)
@@ -709,6 +624,7 @@ VOID DrawWindowBorderForTargeting(
     }
 }
 
+_Function_class_(PH_SEARCHCONTROL_CALLBACK)
 VOID NTAPI SearchControlCallback(
     _In_ ULONG_PTR MatchHandle,
     _In_opt_ PVOID Context
@@ -716,16 +632,40 @@ VOID NTAPI SearchControlCallback(
 {
     SearchMatchHandle = MatchHandle;
 
-    // Expand the nodes to ensure that they will be visible to the user.
-    PhExpandAllProcessNodes(TRUE);
-    PhDeselectAllProcessNodes();
-    PhDeselectAllServiceNodes();
+    if (SearchMatchHandle)
+    {
+        // Expand the nodes to ensure that they will be visible to the user.
+        PhExpandAllProcessNodes(TRUE);
+
+        PhDeselectAllProcessNodes();
+        PhDeselectAllServiceNodes();
+        PhDeselectAllNetworkNodes();
+
+        if (RestoreRowAfterSearch)
+        {
+            RestoreSearchTreeHandle = NULL;
+            RestoreSearchSelectedNode = NULL;
+        }
+    }
+    else
+    {
+        if (RestoreRowAfterSearch && (RestoreSearchTreeHandle = GetCurrentTreeNewHandle()))
+        {
+            RestoreSearchSelectedNode = TreeNew_GetSelectedNode(RestoreSearchTreeHandle);
+        }
+    }
 
     PhApplyTreeNewFilters(PhGetFilterSupportProcessTreeList());
     PhApplyTreeNewFilters(PhGetFilterSupportServiceTreeList());
     PhApplyTreeNewFilters(PhGetFilterSupportNetworkTreeList());
 
-    PhInvokeCallback(&SearchChangedEvent, (PVOID)SearchMatchHandle);
+    PluginInterfaceInvokeSearchChangedEvent(SearchMatchHandle);
+
+    if (RestoreRowAfterSearch && RestoreSearchTreeHandle && RestoreSearchSelectedNode)
+    {
+        TreeNew_FocusMarkSelectNode(RestoreSearchTreeHandle, RestoreSearchSelectedNode);
+        TreeNew_EnsureVisible(RestoreSearchTreeHandle, RestoreSearchSelectedNode);
+    }
 }
 
 VOID SetSearchFocus(
@@ -739,15 +679,17 @@ VOID SetSearchFocus(
         {
             if (SearchBoxDisplayMode == SEARCHBOX_DISPLAY_MODE_HIDEINACTIVE)
             {
-                LONG dpiValue;
-
-                dpiValue = SystemInformer_GetWindowDpi();
+                LONG dpiValue = SystemInformer_GetWindowDpi();
 
                 if (!RebarBandExists(REBAR_BAND_ID_SEARCHBOX))
-                    RebarBandInsert(REBAR_BAND_ID_SEARCHBOX, SearchboxHandle, PhGetDpi(180, dpiValue), 22);
+                {
+                    RebarBandInsert(REBAR_BAND_ID_SEARCHBOX, SearchboxHandle, PhScaleToDisplay(180, dpiValue), 22);
+                }
 
                 if (!IsWindowVisible(SearchboxHandle))
+                {
                     ShowWindow(SearchboxHandle, SW_SHOW);
+                }
             }
 
             SetFocus(SearchboxHandle);
@@ -758,21 +700,11 @@ VOID SetSearchFocus(
             HWND tnHandle;
 
             // Return focus to the treelist.
+
             if (tnHandle = GetCurrentTreeNewHandle())
             {
-                ULONG tnCount = TreeNew_GetFlatNodeCount(tnHandle);
-
-                for (ULONG i = 0; i < tnCount; i++)
-                {
-                    PPH_TREENEW_NODE node = TreeNew_GetFlatNode(tnHandle, i);
-
-                    // Select the first visible node.
-                    if (node->Visible)
-                    {
-                        TreeNew_FocusMarkSelectNode(tnHandle, node);
-                        break;
-                    }
-                }
+                // Select the first visible node.
+                TreeNew_SelectFirstVisibleNode(tnHandle);
             }
         }
     }
@@ -969,18 +901,17 @@ LRESULT CALLBACK MainWindowCallbackProc(
                     break;
                 case RBN_CHEVRONPUSHED:
                     {
-                        LPNMREBARCHEVRON rebar;
+                        LPNMREBARCHEVRON rebar = (LPNMREBARCHEVRON)lParam;
                         ULONG index = 0;
                         ULONG buttonCount = 0;
                         RECT toolbarRect;
                         PPH_EMENU menu;
                         PPH_EMENU_ITEM selectedItem;
 
-                        rebar = (LPNMREBARCHEVRON)lParam;
+                        if (!PhGetClientRect(ToolBarHandle, &toolbarRect))
+                            break;
+
                         menu = PhCreateEMenu();
-
-                        GetClientRect(ToolBarHandle, &toolbarRect);
-
                         buttonCount = (ULONG)SendMessage(ToolBarHandle, TB_BUTTONCOUNT, 0, 0);
 
                         for (index = 0; index < buttonCount; index++)
@@ -1085,7 +1016,7 @@ LRESULT CALLBACK MainWindowCallbackProc(
                             }
                         }
 
-                        MapWindowRect(RebarHandle, NULL, &rebar->rc);
+                        MapWindowRect(RebarHandle, HWND_DESKTOP, &rebar->rc);
 
                         selectedItem = PhShowEMenu(
                             menu,
@@ -1188,7 +1119,6 @@ LRESULT CALLBACK MainWindowCallbackProc(
                             break;
 
                         menu = PhCreateEMenu();
-
                         PhInsertEMenuItem(menu, PhCreateEMenuItem(0, PHAPP_ID_COMPUTER_LOCK, L"&Lock", NULL, NULL), ULONG_MAX);
                         PhInsertEMenuItem(menu, PhCreateEMenuItem(0, PHAPP_ID_COMPUTER_LOGOFF, L"Log o&ff", NULL, NULL), ULONG_MAX);
                         PhInsertEMenuItem(menu, PhCreateEMenuSeparator(), ULONG_MAX);
@@ -1216,7 +1146,7 @@ LRESULT CALLBACK MainWindowCallbackProc(
                                 PhDestroyEMenuItem(menuItemRemove);
                         }
 
-                        MapWindowRect(ToolBarHandle, NULL, &toolbar->rcButton);
+                        MapWindowRect(ToolBarHandle, HWND_DESKTOP, &toolbar->rcButton);
 
                         selectedItem = PhShowEMenu(
                             menu,
@@ -1286,6 +1216,53 @@ LRESULT CALLBACK MainWindowCallbackProc(
                 case NM_RCLICK:
                     {
                         StatusBarShowMenu(WindowHandle);
+                    }
+                    break;
+                case NM_DBLCLK:
+                    {
+                        LPNMITEMACTIVATE nmItem = (LPNMITEMACTIVATE)lParam;
+                        LONG parts[MAX_STATUSBAR_ITEMS];
+                        LONG count;
+
+                        if (nmItem->iItem < 0)
+                            break;
+
+                        count = (LONG)SendMessage(StatusBarHandle, SB_GETPARTS, (WPARAM)RTL_NUMBER_OF(parts), (LPARAM)parts);
+
+                        POINT cursorPos;
+                        GetCursorPos(&cursorPos);
+                        ScreenToClient(StatusBarHandle, &cursorPos);
+
+                        for (LONG i = 0; i < count; ++i)
+                        {
+                            RECT rect;
+
+                            if (i == 0)
+                                rect.left = 0;
+                            else
+                                rect.left = parts[i - 1];
+
+                            rect.right = parts[i];
+
+                            if (cursorPos.x >= rect.left && cursorPos.x < rect.right)
+                            {
+                                switch (PtrToUlong(StatusBarItemList->Items[i]))
+                                {
+                                case ID_STATUS_CPUUSAGE:
+                                    PhShowSystemInformationDialog(L"CPU");
+                                    break;
+                                case ID_STATUS_PHYSICALMEMORY:
+                                    PhShowSystemInformationDialog(L"Memory");
+                                    break;
+                                case ID_STATUS_IO_RO:
+                                case ID_STATUS_IO_W:
+                                    PhShowSystemInformationDialog(L"I/O");
+                                    break;
+                                }
+
+                                break;
+                            }
+                        }
                     }
                     break;
                 }
@@ -1660,7 +1637,6 @@ LRESULT CALLBACK MainWindowCallbackProc(
     }
 
     return MainWindowHookProc(WindowHandle, WindowMessage, wParam, lParam);
-
 DefaultWndProc:
     return DefWindowProc(WindowHandle, WindowMessage, wParam, lParam);
 }
@@ -1694,7 +1670,9 @@ VOID NTAPI MainWindowShowingCallback(
     }
 
     if (ToolStatusConfig.SearchBoxEnabled && ToolStatusConfig.SearchAutoFocus && SearchboxHandle)
+    {
         SetFocus(SearchboxHandle);
+    }
 }
 
 _Function_class_(PH_CALLBACK_FUNCTION)
@@ -1765,12 +1743,13 @@ VOID NTAPI LoadCallback(
     RestoreRowAfterSearch = !!PhGetIntegerSetting(SETTING_NAME_RESTOREROWAFTERSEARCH);
     EnableThemeSupport = !!PhGetIntegerSetting(L"EnableThemeSupport");
     UpdateGraphs = !PhGetIntegerSetting(L"StartHidden");
-    TabInfoHashtable = PhCreateSimpleHashtable(3);
 
     // Note: The initialization delay improves performance during application
     // launch and was made configurable per feature request. (dmex)
     MaxInitializationDelay = PhGetIntegerSetting(SETTING_NAME_DELAYED_INITIALIZATION_MAX);
     MaxInitializationDelay = __max(0, __min(MaxInitializationDelay, 5));
+
+    PluginInterfaceInitialize();
 
     MainWindowHookProc = SystemInformer_GetWindowProcedure();
     SystemInformer_SetWindowProcedure(MainWindowCallbackProc);
@@ -1837,43 +1816,35 @@ VOID NTAPI MenuItemCallback(
             break;
         case COMMAND_ID_TOOLBAR_LOCKUNLOCK:
             {
-                UINT bandCount;
-                UINT bandIndex;
+                ULONG bandCount;
+                ULONG bandIndex;
 
-                bandCount = (UINT)SendMessage(RebarHandle, RB_GETBANDCOUNT, 0, 0);
-
-                for (bandIndex = 0; bandIndex < bandCount; bandIndex++)
+                if (RebarGetBandCount(&bandCount))
                 {
-                    REBARBANDINFO rebarBandInfo =
+                    for (bandIndex = 0; bandIndex < bandCount; bandIndex++)
                     {
-                        sizeof(REBARBANDINFO),
-                        RBBIM_STYLE
-                    };
+                        ULONG rebarBandStyle;
 
-                    SendMessage(RebarHandle, RB_GETBANDINFO, bandIndex, (LPARAM)&rebarBandInfo);
+                        if (!RebarGetBandIndexStyle(bandIndex, &rebarBandStyle))
+                            continue;
 
-                    if (!FlagOn(rebarBandInfo.fStyle, RBBS_GRIPPERALWAYS))
-                    {
-                        // Removing the RBBS_NOGRIPPER style doesn't remove the gripper padding,
-                        // So we toggle the RBBS_GRIPPERALWAYS style to make the Toolbar remove the padding.
+                        // Add then remove the RBBS_GRIPPERALWAYS style from the Rebar control to remove
+                        // window padding that is left behind after removing the RBBS_NOGRIPPER style. (dmex)
 
-                        SetFlag(rebarBandInfo.fStyle, RBBS_GRIPPERALWAYS);
+                        if (!FlagOn(rebarBandStyle, RBBS_GRIPPERALWAYS))
+                        {
+                            SetFlag(rebarBandStyle, RBBS_GRIPPERALWAYS);
+                            RebarSetBandIndexStyle(bandIndex, rebarBandStyle);
+                            ClearFlag(rebarBandStyle, RBBS_GRIPPERALWAYS);
+                        }
 
-                        SendMessage(RebarHandle, RB_SETBANDINFO, bandIndex, (LPARAM)&rebarBandInfo);
+                        if (FlagOn(rebarBandStyle, RBBS_NOGRIPPER))
+                            ClearFlag(rebarBandStyle, RBBS_NOGRIPPER);
+                        else
+                            SetFlag(rebarBandStyle, RBBS_NOGRIPPER);
 
-                        ClearFlag(rebarBandInfo.fStyle, RBBS_GRIPPERALWAYS);
+                        RebarSetBandIndexStyle(bandIndex, rebarBandStyle);
                     }
-
-                    if (FlagOn(rebarBandInfo.fStyle, RBBS_NOGRIPPER))
-                    {
-                        ClearFlag(rebarBandInfo.fStyle, RBBS_NOGRIPPER);
-                    }
-                    else
-                    {
-                        SetFlag(rebarBandInfo.fStyle, RBBS_NOGRIPPER);
-                    }
-
-                    SendMessage(RebarHandle, RB_SETBANDINFO, bandIndex, (LPARAM)&rebarBandInfo);
                 }
 
                 ToolStatusConfig.ToolBarLocked = !ToolStatusConfig.ToolBarLocked;
@@ -1890,13 +1861,7 @@ VOID NTAPI MenuItemCallback(
             break;
         case COMMAND_ID_GRAPHS_CUSTOMIZE:
             {
-                PPH_TOOLBAR_GRAPH icon;
-
-                icon = menuItem->Context;
-                ToolbarSetVisibleGraph(icon, !(icon->Flags & PH_NF_ICON_ENABLED));
-
-                ToolbarGraphSaveSettings();
-                ReBarSaveLayoutSettings();
+                ToolbarUpdateVisibleGraph(menuItem->Context);
             }
             break;
         }

@@ -1136,28 +1136,66 @@ PPH_STRING DnCreateStringSafe(
     _In_ UNALIGNED PCWSTR UnalignedString
     )
 {
-    if (IS_ALIGNED(UnalignedString, MAX_NATURAL_ALIGNMENT))
+    if (IS_ALIGNED(UnalignedString, MEMORY_ALLOCATION_ALIGNMENT))
     {
         // Address is aligned, access directly
-
         return PhCreateString(UnalignedString);
     }
-    else // if (((ULONG_PTR)UnalignedString % sizeof(PWSTR)) != 0)
+    else
     {
+        WCHAR ch;
         SIZE_T alignedLength = 0;
-        WCHAR alignedBuffer[0x800];
+        const unsigned char *src = (const unsigned char *)UnalignedString;
+        const SIZE_T maxChars = 0x1000 - 1;
 
-        // Address is not aligned, use memcpy to access the string.
+        SIZE_T allocSize = 0x1000 * sizeof(WCHAR);
+        WCHAR *alignedBuffer = _aligned_malloc(allocSize, MEMORY_ALLOCATION_ALIGNMENT);
 
-        while (UnalignedString[alignedLength] != UNICODE_NULL && alignedLength < RTL_NUMBER_OF(alignedBuffer) - sizeof(UNICODE_NULL))
+        if (alignedBuffer)
         {
-            alignedLength++;
+            // Read one WCHAR at a time from the unaligned source using memcpy to avoid unaligned wide deref.
+            while (alignedLength < maxChars)
+            {
+                memcpy(&ch, src + alignedLength * sizeof(WCHAR), sizeof(WCHAR));
+                if (ch == UNICODE_NULL)
+                    break;
+                alignedLength++;
+            }
+
+            // Copy the measured characters into alignedBuffer (memcpy handles unaligned source).
+            if (alignedLength)
+            {
+                memcpy(alignedBuffer, UnalignedString, alignedLength * sizeof(WCHAR));
+            }
+            alignedBuffer[alignedLength] = UNICODE_NULL;
+
+            PPH_STRING result = PhCreateString(alignedBuffer);
+            _aligned_free(alignedBuffer);
+            return result;
         }
+        else
+        {
+            // Fallback to a small stack buffer if allocation fails.
+            WCHAR smallBuffer[256];
+            const SIZE_T smallMax = RTL_NUMBER_OF(smallBuffer) - 1;
+            alignedLength = 0;
 
-        memcpy(alignedBuffer, UnalignedString, alignedLength * sizeof(WCHAR));
-        alignedBuffer[alignedLength] = UNICODE_NULL;
+            while (alignedLength < smallMax)
+            {
+                memcpy(&ch, src + alignedLength * sizeof(WCHAR), sizeof(WCHAR));
+                if (ch == UNICODE_NULL)
+                    break;
+                alignedLength++;
+            }
 
-        return PhCreateString(alignedBuffer);
+            if (alignedLength)
+            {
+                memcpy(smallBuffer, UnalignedString, alignedLength * sizeof(WCHAR));
+            }
+            smallBuffer[alignedLength] = UNICODE_NULL;
+
+            return PhCreateString(smallBuffer);
+        }
     }
 }
 
@@ -1612,6 +1650,7 @@ ULONG UpdateDotNetTraceInfoWithTimeout(
     return Context->TraceResult;
 }
 
+_Function_class_(USER_THREAD_START_ROUTINE)
 NTSTATUS DotNetTraceQueryThreadStart(
     _In_ PVOID Parameter
     )
@@ -1686,6 +1725,7 @@ NTSTATUS DotNetTraceQueryThreadStart(
     return STATUS_SUCCESS;
 }
 
+_Function_class_(USER_THREAD_START_ROUTINE)
 NTSTATUS DotNetSosTraceQueryThreadStart(
     _In_ PASMPAGE_QUERY_CONTEXT Context
     )
@@ -1819,6 +1859,7 @@ CleanupExit:
     return STATUS_SUCCESS;
 }
 
+_Function_class_(PH_TYPE_DELETE_PROCEDURE)
 VOID DotNetQueryContextDeleteProcedure(
     _In_ PASMPAGE_QUERY_CONTEXT Context,
     _In_ ULONG Flags
@@ -2120,7 +2161,8 @@ INT_PTR CALLBACK DotNetAsmPageDlgProc(
                     PPH_EMENU_ITEM highlightNativeItem;
                     PPH_EMENU_ITEM selectedItem;
 
-                    GetWindowRect(GetDlgItem(hwndDlg, IDC_OPTIONS), &rect);
+                    if (!PhGetWindowRect(GetDlgItem(hwndDlg, IDC_OPTIONS), &rect))
+                        break;
 
                     menu = PhCreateEMenu();
                     PhInsertEMenuItem(menu, dynamicItem = PhCreateEMenuItem(0, DN_ASM_MENU_HIDE_DYNAMIC_OPTION, L"Hide dynamic", NULL, NULL), ULONG_MAX);

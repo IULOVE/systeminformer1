@@ -115,6 +115,381 @@ NTSTATUS PhSetObjectSecurity(
         );
 }
 
+/**
+ * Merges two SACLs according to the provided security information.
+ * The function preserves ACEs not covered by the change from the lower SACL and replaces other
+ * ACEs with the ones from the higher SACL.
+ * 
+ * Example:
+ *  - A lower SACL containing two ACEs: a trust label and a mandatory label.
+ *  - A higher SACL containing one ACE: a trust label.
+ *  - Security information specifies PROCESS_TRUST_LABEL_SECURITY_INFORMATION.
+ * Result: a SACL with the trust label from the higher SACL and the mandatory label from the lower SACL.
+ *
+ * \param LowerSacl An existing SACL with potentially mixed ACE types.
+ * \param HigherSacl An overlaying SACL for the specified security information.
+ * \param SecurityInformation The type of security information to be set.
+ * \param MergedSacl The new merged SACL.
+ */
+NTSTATUS PhMergeSystemAcls(
+    _In_opt_ PACL LowerSacl,
+    _In_opt_ PACL HigherSacl,
+    _In_ SECURITY_INFORMATION SecurityInformation,
+    _Outptr_result_maybenull_ PACL* MergedSacl
+    )
+{
+    NTSTATUS status;
+    ULONG aceTypesToReplace = 0;
+    ULONG requiredSize = 0;
+    PACL mergedSacl;
+    PACE_HEADER mergedAce;
+
+    if (!LowerSacl && !HigherSacl)
+    {
+        // Nothing to merge
+        *MergedSacl = NULL;
+        return STATUS_SUCCESS;
+    }
+
+    if (LowerSacl && (LowerSacl->AclRevision < MIN_ACL_REVISION || LowerSacl->AclRevision > MAX_ACL_REVISION))
+        return STATUS_UNKNOWN_REVISION;
+
+    if (HigherSacl && (HigherSacl->AclRevision < MIN_ACL_REVISION || HigherSacl->AclRevision > MAX_ACL_REVISION))
+        return STATUS_UNKNOWN_REVISION;
+
+    // Identify which types of ACEs we want to keep from the lower SACL and
+    // which to replace with the ones from the higher SACL
+
+    if (FlagOn(SecurityInformation, SACL_SECURITY_INFORMATION))
+        aceTypesToReplace |= AUDIT_ALARM_ACE_TYPE_MASK;
+    if (FlagOn(SecurityInformation, LABEL_SECURITY_INFORMATION))
+        aceTypesToReplace |= MANDATORY_LABEL_ACE_TYPE_MASK;
+    if (FlagOn(SecurityInformation, ATTRIBUTE_SECURITY_INFORMATION))
+        aceTypesToReplace |= RESOURCE_ATTRIBUTE_ACE_TYPE_MASK;
+    if (FlagOn(SecurityInformation, SCOPE_SECURITY_INFORMATION))
+        aceTypesToReplace |= SCOPED_POLICY_ACE_TYPE_MASK;
+    if (FlagOn(SecurityInformation, PROCESS_TRUST_LABEL_SECURITY_INFORMATION))
+        aceTypesToReplace |= PROCESS_TRUST_ACE_TYPE_MASK;
+    if (FlagOn(SecurityInformation, ACCESS_FILTER_SECURITY_INFORMATION))
+        aceTypesToReplace |= ACCESS_FILTER_ACE_TYPE_MASK;
+
+    // Calculate the size of ACEs to keep from the lower SACL
+
+    if (LowerSacl && !HigherSacl && aceTypesToReplace == 0)
+    {
+        if (LowerSacl->AclSize > USHORT_MAX)
+            return STATUS_INVALID_PARAMETER;
+
+        mergedSacl = (PACL)PhAllocate(LowerSacl->AclSize);
+        RtlCopyMemory(mergedSacl, LowerSacl, LowerSacl->AclSize);
+        *MergedSacl = mergedSacl;
+        return STATUS_SUCCESS;
+    }
+
+    // Helper macro to walk the ACL. (dmex)
+#define START_FOR_EACH_ACE(_ACL_, _ACE_) \
+    if (_ACL_) \
+    { \
+        PVOID _end = PTR_ADD_OFFSET((_ACL_), (_ACL_)->AclSize); \
+        PACE_HEADER _ACE_ = (PACE_HEADER)PTR_ADD_OFFSET((_ACL_), sizeof(ACL)); \
+        for (USHORT _i = 0; _i < (_ACL_)->AceCount; _i++, _ACE_ = (PACE_HEADER)PTR_ADD_OFFSET(_ACE_, _ACE_->AceSize)) \
+        { \
+            if ((ULONG_PTR)_ACE_ >= (ULONG_PTR)_end) \
+                return STATUS_UNSUCCESSFUL; /* malformed */ \
+            if (_ACE_->AceSize < sizeof(ACE_HEADER) || PTR_ADD_OFFSET(_ACE_, _ACE_->AceSize) > _end) \
+                return STATUS_UNSUCCESSFUL; /* malformed */
+#define END_FOR_EACH_ACE } }
+
+    // Calculate required payload size (sum of selected ACE sizes).
+
+    if (LowerSacl)
+    {
+        START_FOR_EACH_ACE(LowerSacl, ace)
+        {
+            ULONG bit = ace->AceType < 32 ? (1u << ace->AceType) : 0;
+
+            if (!FlagOn(bit, aceTypesToReplace))
+            {
+                requiredSize += ace->AceSize;
+            }
+        }
+        END_FOR_EACH_ACE
+    }
+
+    // Calculate the size of ACEs to use from the higher SACL
+
+    if (HigherSacl)
+    {
+        START_FOR_EACH_ACE(HigherSacl, ace)
+        {
+            ULONG bit = ace->AceType < 32 ? (1u << ace->AceType) : 0;
+
+            if (FlagOn(bit, aceTypesToReplace))
+            {
+                requiredSize += ace->AceSize;
+            }
+        }
+        END_FOR_EACH_ACE
+    }
+
+    // Allocate new ACL (header + aligned payload).
+
+    requiredSize = sizeof(ACL) + ALIGN_UP_BY(requiredSize, sizeof(ULONG));
+
+    if (requiredSize > USHORT_MAX)
+        return STATUS_INVALID_PARAMETER;
+
+    mergedSacl = (PACL)PhAllocate(requiredSize);
+    mergedAce = (PACE_HEADER)PTR_ADD_OFFSET(mergedSacl, sizeof(ACL));
+
+    status = PhCreateAcl(mergedSacl, requiredSize, ACL_REVISION);
+
+    if (!NT_SUCCESS(status))
+    {
+        PhFree(mergedSacl);
+        return status;
+    }
+
+    // Add the lower SACL ACEs we keep
+
+    if (LowerSacl)
+    {
+        START_FOR_EACH_ACE(LowerSacl, ace)
+        {
+            ULONG bit = ace->AceType < 32 ? (1u << ace->AceType) : 0;
+            if (!(bit & aceTypesToReplace))
+            {
+                RtlCopyMemory(mergedAce, ace, ace->AceSize);
+                mergedSacl->AceCount++;
+                PhEnsureAclRevision(&mergedSacl->AclRevision, mergedAce->AceType);
+                mergedAce = (PACE_HEADER)PTR_ADD_OFFSET(mergedAce, mergedAce->AceSize);
+            }
+        }
+        END_FOR_EACH_ACE
+    }
+
+    // Add the higher SACL ACEs
+
+    if (HigherSacl)
+    {
+        START_FOR_EACH_ACE(HigherSacl, ace)
+        {
+            ULONG bit = ace->AceType < 32 ? (1u << ace->AceType) : 0;
+            if (bit & aceTypesToReplace)
+            {
+                RtlCopyMemory(mergedAce, ace, ace->AceSize);
+                mergedSacl->AceCount++;
+                PhEnsureAclRevision(&mergedSacl->AclRevision, mergedAce->AceType);
+                mergedAce = (PACE_HEADER)PTR_ADD_OFFSET(mergedAce, mergedAce->AceSize);
+            }
+        }
+        END_FOR_EACH_ACE
+    }
+
+#undef START_FOR_EACH_ACE
+#undef END_FOR_EACH_ACE
+
+    *MergedSacl = mergedSacl;
+    return STATUS_SUCCESS;
+}
+
+/**
+ * Merges two security descriptors according to the provided security information.
+ * The function preserves parts not covered by the change from the lower security descriptor and
+ * replaces other parts with the ones from the higher security descriptor.
+ * 
+ * Example:
+ *  - A lower security descriptor containing a DACL, an owner, and a SACL with a trust label.
+ *  - A higher security descriptor containing a DACL, and a SACL with a mandatory label.
+ *  - Security information specifies DACL_SECURITY_INFORMATION and LABEL_SECURITY_INFORMATION.
+ * Result: a security descriptor with the higher DACL, the lower owner, and a merged SACL with
+ * the lower trust label and the higher mandatory label.
+ *
+ * \param LowerSecurityDescriptor An existing security descriptor.
+ * \param HigherSecurityDescriptor An overlaying security descriptor for the specified security information.
+ * \param SecurityInformation The type of security information to be set.
+ * \param MergedSecurityDescriptor The new merged security descriptor.
+ */
+NTSTATUS PhMergeSecurityDescriptors(
+    _In_ PSECURITY_DESCRIPTOR LowerSecurityDescriptor,
+    _In_ PSECURITY_DESCRIPTOR HigherSecurityDescriptor,
+    _In_ SECURITY_INFORMATION SecurityInformation,
+    _Outptr_ PSECURITY_DESCRIPTOR* MergedSecurityDescriptor
+    )
+{
+    NTSTATUS status;
+    SECURITY_DESCRIPTOR mergedSecurityDescriptor;
+    PACL acl;
+    PSID sid;
+    BOOLEAN present;
+    BOOLEAN defaulted;
+    PACL higherSacl;
+    PACL lowerSacl;
+    PACL mergedSacl = NULL;
+    PSECURITY_DESCRIPTOR relativeSecurityDescriptor = NULL;
+    ULONG requiredLength = 0;
+
+    status = PhCreateSecurityDescriptor(&mergedSecurityDescriptor, SECURITY_DESCRIPTOR_REVISION);
+
+    if (!NT_SUCCESS(status))
+        return status;
+
+    // Choose the DACL
+
+    status = PhGetDaclSecurityDescriptor(
+        (SecurityInformation & DACL_SECURITY_INFORMATION) ? HigherSecurityDescriptor : LowerSecurityDescriptor,
+        &present,
+        &acl,
+        &defaulted
+        );
+
+    if (!NT_SUCCESS(status))
+        return status;
+
+    status = PhSetDaclSecurityDescriptor(
+        &mergedSecurityDescriptor,
+        present,
+        acl,
+        defaulted
+        );
+
+    if (!NT_SUCCESS(status))
+        return status;
+
+    // Choose the owner
+
+    status = PhGetOwnerSecurityDescriptor(
+        (SecurityInformation & OWNER_SECURITY_INFORMATION) ? HigherSecurityDescriptor : LowerSecurityDescriptor,
+        &sid,
+        &defaulted
+        );
+
+    if (!NT_SUCCESS(status))
+        return status;
+
+    if (!sid)
+        return STATUS_INVALID_OWNER;
+
+    status = PhSetOwnerSecurityDescriptor(
+        &mergedSecurityDescriptor,
+        sid,
+        defaulted
+        );
+
+    if (!NT_SUCCESS(status))
+        return status;
+
+    // Choose the primary group
+
+    status = PhGetGroupSecurityDescriptor(
+        (SecurityInformation & GROUP_SECURITY_INFORMATION) ? HigherSecurityDescriptor : LowerSecurityDescriptor,
+        &sid,
+        &defaulted
+        );
+
+    if (!NT_SUCCESS(status))
+        return status;
+
+    if (!sid)
+        return STATUS_INVALID_PRIMARY_GROUP;
+
+    status = PhSetGroupSecurityDescriptor(
+        &mergedSecurityDescriptor,
+        sid,
+        defaulted
+        );
+
+    if (!NT_SUCCESS(status))
+        return status;
+
+    // Collect both SACLs
+
+    status = PhGetSaclSecurityDescriptor(
+        LowerSecurityDescriptor,
+        &present,
+        &lowerSacl,
+        &defaulted
+        );
+
+    if (!NT_SUCCESS(status))
+        return status;
+
+    if (!present)
+        lowerSacl = NULL;
+
+    status = PhGetSaclSecurityDescriptor(
+        HigherSecurityDescriptor,
+        &present,
+        &higherSacl,
+        &defaulted
+        );
+
+    if (!NT_SUCCESS(status))
+        return status;
+
+    if (!present)
+        higherSacl = NULL;
+
+    // Merge SACLs and apply
+
+    status = PhMergeSystemAcls(
+        lowerSacl,
+        higherSacl,
+        SecurityInformation,
+        &mergedSacl
+        );
+
+    if (!NT_SUCCESS(status))
+        return status;
+
+    status = PhSetSaclSecurityDescriptor(
+        &mergedSecurityDescriptor,
+        !!mergedSacl,
+        mergedSacl,
+        FALSE
+        );
+
+    if (!NT_SUCCESS(status))
+        goto CleanupExit;
+
+    // Make the buffer self-relative
+
+    status = RtlAbsoluteToSelfRelativeSD(
+        &mergedSecurityDescriptor,
+        NULL,
+        &requiredLength
+        );
+
+    if (status != STATUS_BUFFER_TOO_SMALL)
+    {
+        status = STATUS_INVALID_SECURITY_DESCR;
+        goto CleanupExit;
+    }
+
+    relativeSecurityDescriptor = PhAllocate(requiredLength);
+
+    status = RtlAbsoluteToSelfRelativeSD(
+        &mergedSecurityDescriptor,
+        relativeSecurityDescriptor,
+        &requiredLength
+        );
+
+    if (!NT_SUCCESS(status))
+        goto CleanupExit;
+
+    *MergedSecurityDescriptor = relativeSecurityDescriptor;
+    relativeSecurityDescriptor = NULL;
+
+CleanupExit:
+    if (mergedSacl)
+        PhFree(mergedSacl);
+
+    if (relativeSecurityDescriptor)
+        PhFree(relativeSecurityDescriptor);
+   
+    return status;
+}
+
 NTSTATUS PhEnumProcessEnvironmentVariables(
     _In_ PVOID Environment,
     _In_ ULONG EnvironmentLength,
@@ -392,7 +767,7 @@ NTSTATUS PhGetProcessUnloadedDlls(
     PULONG elementCount;
     PVOID eventTrace;
     HANDLE processHandle = NULL;
-    ULONG eventTraceSize;
+    SIZE_T eventTraceSize;
     ULONG capturedElementSize = 0;
     ULONG capturedElementCount = 0;
     PVOID capturedEventTracePointer;
@@ -407,7 +782,7 @@ NTSTATUS PhGetProcessUnloadedDlls(
     // Since ntdll is loaded at the same base address across all processes,
     // we can read the information in.
 
-    if (!NT_SUCCESS(status = NtReadVirtualMemory(
+    if (!NT_SUCCESS(status = PhReadVirtualMemory(
         processHandle,
         elementSize,
         &capturedElementSize,
@@ -416,7 +791,7 @@ NTSTATUS PhGetProcessUnloadedDlls(
         )))
         goto CleanupExit;
 
-    if (!NT_SUCCESS(status = NtReadVirtualMemory(
+    if (!NT_SUCCESS(status = PhReadVirtualMemory(
         processHandle,
         elementCount,
         &capturedElementCount,
@@ -425,7 +800,7 @@ NTSTATUS PhGetProcessUnloadedDlls(
         )))
         goto CleanupExit;
 
-    if (!NT_SUCCESS(status = NtReadVirtualMemory(
+    if (!NT_SUCCESS(status = PhReadVirtualMemory(
         processHandle,
         eventTrace,
         &capturedEventTracePointer,
@@ -452,7 +827,7 @@ NTSTATUS PhGetProcessUnloadedDlls(
         goto CleanupExit;
     }
 
-    if (!NT_SUCCESS(status = NtReadVirtualMemory(
+    if (!NT_SUCCESS(status = PhReadVirtualMemory(
         processHandle,
         capturedEventTracePointer,
         capturedEventTrace,
@@ -574,6 +949,47 @@ NTSTATUS PhGetWindowClientId(
 
     return STATUS_NOT_FOUND;
 }
+
+/*
+ * Opens a job object.
+ *
+ * \param JobHandle A variable which receives a handle to the job object.
+ * \param DesiredAccess The desired access to the job object.
+ * \param RootDirectory A handle to the object directory of the job.
+ * \param ObjectName The name of the job object.
+ * \return Returns the status of the operation.
+ */
+NTSTATUS PhOpenJobObject(
+    _Out_ PHANDLE JobHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ HANDLE RootDirectory,
+    _In_ PCPH_STRINGREF ObjectName
+    )
+{
+    NTSTATUS status;
+    UNICODE_STRING objectName;
+    OBJECT_ATTRIBUTES objectAttributes;
+
+    if (!PhStringRefToUnicodeString(ObjectName, &objectName))
+        return STATUS_NAME_TOO_LONG;
+
+    InitializeObjectAttributes(
+        &objectAttributes,
+        &objectName,
+        OBJ_CASE_INSENSITIVE,
+        RootDirectory,
+        NULL
+        );
+
+    status = NtOpenJobObject(
+        JobHandle,
+        DesiredAccess,
+        &objectAttributes
+        );
+
+    return status;
+}
+
 
 NTSTATUS PhGetJobProcessIdList(
     _In_ HANDLE JobHandle,
@@ -1021,7 +1437,7 @@ typedef struct _OPEN_DRIVER_BY_BASE_ADDRESS_CONTEXT
 } OPEN_DRIVER_BY_BASE_ADDRESS_CONTEXT, *POPEN_DRIVER_BY_BASE_ADDRESS_CONTEXT;
 
 _Function_class_(PH_ENUM_DIRECTORY_OBJECTS)
-BOOLEAN NTAPI PhpOpenDriverByBaseAddressCallback(
+NTSTATUS NTAPI PhpOpenDriverByBaseAddressCallback(
     _In_ HANDLE RootDirectory,
     _In_ PPH_STRINGREF Name,
     _In_ PPH_STRINGREF TypeName,
@@ -1035,7 +1451,7 @@ BOOLEAN NTAPI PhpOpenDriverByBaseAddressCallback(
     KPH_DRIVER_BASIC_INFORMATION basicInfo;
 
     if (!PhStringRefToUnicodeString(Name, &driverName))
-        return TRUE;
+        return STATUS_NAME_TOO_LONG;
 
     InitializeObjectAttributes(
         &objectAttributes,
@@ -1052,7 +1468,7 @@ BOOLEAN NTAPI PhpOpenDriverByBaseAddressCallback(
         );
 
     if (!NT_SUCCESS(status))
-        return TRUE;
+        return status;
 
     status = KphQueryInformationDriver(
         driverHandle,
@@ -1068,14 +1484,13 @@ BOOLEAN NTAPI PhpOpenDriverByBaseAddressCallback(
         {
             Context->Status = STATUS_SUCCESS;
             Context->DriverHandle = driverHandle;
-
-            return FALSE;
+            return STATUS_SUCCESS;
         }
     }
 
     NtClose(driverHandle);
 
-    return TRUE;
+    return status;
 }
 
 /**
@@ -1409,7 +1824,7 @@ NTSTATUS PhpUnloadDriver(
 NTSTATUS PhUnloadDriver(
     _In_opt_ PVOID BaseAddress,
     _In_opt_ PCPH_STRINGREF Name,
-    _In_opt_ PCPH_STRINGREF FileName
+    _In_ PCPH_STRINGREF FileName
     )
 {
     NTSTATUS status;
@@ -1428,7 +1843,7 @@ NTSTATUS PhUnloadDriver(
 
     if ((level == KphLevelMax) && BaseAddress)
     {
-        if (!PhIsRtlModuleBase(BaseAddress))
+        if (PhGetOwnTokenAttributes().Elevated)
         {
             if (NT_SUCCESS(PhOpenDriverByBaseAddress(
                 &driverHandle,
@@ -1739,7 +2154,7 @@ NTSTATUS PhEnumProcessesForSession(
 
     while (TRUE)
     {
-        sessionProcessInfo.SizeOfBuf = bufferSize;
+        sessionProcessInfo.BufferSize = bufferSize;
         sessionProcessInfo.Buffer = buffer;
 
         status = NtQuerySystemInformation(
@@ -2373,22 +2788,29 @@ NTSTATUS PhEnumBigPoolInformation(
     return status;
 }
 
-static BOOLEAN NTAPI PhIsContainerEnumCallback(
+typedef struct _PH_IS_CONTAINER_CONTEXT
+{
+    HANDLE ProcessObject;
+    BOOLEAN Found;
+} PH_IS_CONTAINER_CONTEXT, *PPH_IS_CONTAINER_CONTEXT;
+
+_Function_class_(PH_ENUM_DIRECTORY_OBJECTS)
+static NTSTATUS NTAPI PhIsContainerEnumCallback(
     _In_ HANDLE RootDirectory,
     _In_ PPH_STRINGREF Name,
     _In_ PPH_STRINGREF TypeName,
     _In_ PVOID Context
     )
 {
-    static CONST PH_STRINGREF typeName = PH_STRINGREF_INIT(L"Job");
+    PPH_IS_CONTAINER_CONTEXT context = (PPH_IS_CONTAINER_CONTEXT)Context;
     HANDLE objectHandle;
     UNICODE_STRING objectName;
     OBJECT_ATTRIBUTES objectAttributes;
 
     if (!PhStringRefToUnicodeString(Name, &objectName))
-        return TRUE;
-    if (!PhEqualStringRef(TypeName, &typeName, FALSE))
-        return TRUE;
+        return STATUS_NAME_TOO_LONG;
+    if (!PhEqualStringRef2(TypeName, L"Job", FALSE))
+        return STATUS_NAME_TOO_LONG;
 
     InitializeObjectAttributes(
         &objectAttributes,
@@ -2400,10 +2822,107 @@ static BOOLEAN NTAPI PhIsContainerEnumCallback(
 
     if (NT_SUCCESS(NtOpenJobObject(&objectHandle, JOB_OBJECT_QUERY, &objectAttributes)))
     {
+        if (NT_SUCCESS(NtIsProcessInJob(context->ProcessObject, objectHandle)))
+        {
+            context->Found = TRUE;
+            NtClose(objectHandle);
+            return STATUS_NO_MORE_ENTRIES;
+        }
+
         NtClose(objectHandle);
     }
 
+    return STATUS_SUCCESS;
+}
+
+_Function_class_(PH_ENUM_KEY_CALLBACK)
+static BOOLEAN NTAPI ComputeSystemKeyCallback(
+    _In_ HANDLE RootDirectory,
+    _In_ PVOID Information,
+    _In_ PVOID Context
+    )
+{
+    static CONST PH_STRINGREF objectNamePrefix = PH_STRINGREF_INIT(L"Container_");
+    PKEY_BASIC_INFORMATION basicInfo = (PKEY_BASIC_INFORMATION)Information;
+    PPH_IS_CONTAINER_CONTEXT context = (PPH_IS_CONTAINER_CONTEXT)Context;
+    PH_STRINGREF keyName;
+    PPH_STRING string;
+
+    keyName.Buffer = basicInfo->Name;
+    keyName.Length = basicInfo->NameLength;
+
+    if (string = PhConcatStringRef2(&objectNamePrefix, &keyName))
+    {
+        HANDLE objectHandle;
+
+        if (NT_SUCCESS(PhOpenJobObject(
+            &objectHandle,
+            JOB_OBJECT_QUERY,
+            NULL,
+            &string->sr
+            )))
+        {
+            PJOBOBJECT_BASIC_PROCESS_ID_LIST processIdList;
+
+            if (NT_SUCCESS(PhGetJobProcessIdList(objectHandle, &processIdList)))
+            {
+                for (ULONG i = 0; i < processIdList->NumberOfProcessIdsInList; i++)
+                {
+                    if ((HANDLE)Context == (HANDLE)processIdList->ProcessIdList[i])
+                    {
+                        context->Found = TRUE;
+                    }
+                }
+
+                PhFree(processIdList);
+            }
+
+            // JobObjectAssociateCompletionPortInformation for process start/stop notifications (dmex)
+
+            NtClose(objectHandle);
+        }
+    }
+
+    if (context->Found)
+        return FALSE;
+
     return TRUE;
+}
+
+NTSTATUS PhEnumHostComputeService(
+    _In_ HANDLE ProcessId
+    )
+{
+    static CONST PH_STRINGREF keyName = PH_STRINGREF_INIT(L"Software\\Microsoft\\Windows NT\\CurrentVersion\\HostComputeService\\VolatileStore\\ComputeSystem");
+    NTSTATUS status;
+    HANDLE keyHandle;
+
+    status = PhOpenKey(
+        &keyHandle,
+        KEY_READ,
+        PH_KEY_LOCAL_MACHINE,
+        &keyName,
+        0
+        );
+
+    if (NT_SUCCESS(status))
+    {
+        PH_IS_CONTAINER_CONTEXT context;
+
+        context.ProcessObject = NULL;
+        context.Found = FALSE;
+
+        status = PhEnumerateKey(
+            keyHandle,
+            KeyBasicInformation,
+            ComputeSystemKeyCallback,
+            &context
+            );
+
+        NtClose(keyHandle);
+    }
+
+    return status;
 }
 
 /**
@@ -2419,29 +2938,86 @@ NTSTATUS PhGetProcessIsContainer(
     _Out_opt_ PBOOLEAN IsContainer
     )
 {
-    static CONST PH_STRINGREF directoryName = PH_STRINGREF_INIT(L"\\");
-    NTSTATUS status;
-    HANDLE directoryHandle;
+    {
+        static CONST PH_STRINGREF keyName = PH_STRINGREF_INIT(L"Software\\Microsoft\\Windows NT\\CurrentVersion\\HostComputeService\\VolatileStore\\ComputeSystem");
+        HANDLE keyHandle;
+        PH_IS_CONTAINER_CONTEXT context;
 
-    status = PhOpenDirectoryObject(
-        &directoryHandle,
-        DIRECTORY_QUERY,
-        NULL,
-        &directoryName
-        );
+        context.ProcessObject = NULL;
+        context.Found = FALSE;
 
-    if (!NT_SUCCESS(status))
+        if (NT_SUCCESS(PhOpenKey(
+            &keyHandle,
+            KEY_READ,
+            PH_KEY_LOCAL_MACHINE,
+            &keyName,
+            0
+            )))
+        {
+            PhEnumerateKey(
+                keyHandle,
+                KeyBasicInformation,
+                ComputeSystemKeyCallback,
+                &context
+                );
+
+            NtClose(keyHandle);
+        }
+
+        if (context.Found)
+        {
+            *IsContainer = TRUE;
+            return STATUS_SUCCESS;
+        }
+    }
+
+    {
+        static CONST PH_STRINGREF directoryName = PH_STRINGREF_INIT(L"\\");
+        NTSTATUS status;
+        HANDLE directoryHandle;
+        HANDLE processHandle;
+        PH_IS_CONTAINER_CONTEXT context;
+
+        context.ProcessObject = NULL;
+        context.Found = FALSE;
+
+        status = PhOpenProcess(
+            &processHandle,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+            ProcessId
+            );
+
+        if (NT_SUCCESS(status))
+        {
+            status = PhOpenDirectoryObject(
+                &directoryHandle,
+                DIRECTORY_QUERY,
+                NULL,
+                &directoryName
+                );
+
+            if (NT_SUCCESS(status))
+            {
+                status = PhEnumDirectoryObjects(
+                    directoryHandle,
+                    PhIsContainerEnumCallback,
+                    NULL
+                    );
+
+                NtClose(directoryHandle);
+            }
+
+            NtClose(processHandle);
+        }
+
+        if (context.Found)
+        {
+            *IsContainer = TRUE;
+            return STATUS_SUCCESS;
+        }
+
         return status;
-
-    status = PhEnumDirectoryObjects(
-        directoryHandle,
-        PhIsContainerEnumCallback,
-        NULL
-        );
-
-    NtClose(directoryHandle);
-
-    return status;
+    }
 }
 
 /**
@@ -2879,10 +3455,10 @@ NTSTATUS PhEnumDirectoryObjects(
     ULONG bufferSize;
     POBJECT_DIRECTORY_INFORMATION buffer;
     ULONG i;
-    BOOLEAN result;
 
     bufferSize = 0x200;
-    buffer = PhAllocate(bufferSize);
+    buffer = PhAllocateStack(bufferSize);
+    if (!buffer) return STATUS_NO_MEMORY;
 
     while (TRUE)
     {
@@ -2906,25 +3482,28 @@ NTSTATUS PhEnumDirectoryObjects(
             // Make sure we don't use too much memory.
             if (bufferSize > PH_LARGE_BUFFER_SIZE)
             {
-                PhFree(buffer);
+                PhFreeStack(buffer);
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
 
-            PhFree(buffer);
+            PhFreeStack(buffer);
             bufferSize *= 2;
-            buffer = PhAllocate(bufferSize);
+            buffer = PhAllocateStack(bufferSize);
+            if (!buffer) return STATUS_NO_MEMORY;
         }
 
         if (!NT_SUCCESS(status))
         {
-            PhFree(buffer);
+            if (status == STATUS_NO_MORE_ENTRIES)
+                status = STATUS_SUCCESS;
+
+            PhFreeStack(buffer);
             return status;
         }
 
         // Read the batch and execute the callback function for each object.
 
         i = 0;
-        result = TRUE;
 
         while (TRUE)
         {
@@ -2940,26 +3519,31 @@ NTSTATUS PhEnumDirectoryObjects(
             PhUnicodeStringToStringRef(&info->Name, &name);
             PhUnicodeStringToStringRef(&info->TypeName, &typeName);
 
-            result = Callback(DirectoryHandle, &name, &typeName, Context);
+            status = Callback(
+                DirectoryHandle,
+                &name,
+                &typeName,
+                Context
+                );
 
-            if (!result)
+            if (status == STATUS_NO_MORE_ENTRIES)
                 break;
 
             i++;
         }
 
-        if (!result)
-            break;
-
-        if (status != STATUS_MORE_ENTRIES)
+        if (status == STATUS_NO_MORE_ENTRIES)
             break;
 
         firstTime = FALSE;
     }
 
-    PhFree(buffer);
+    if (status == STATUS_NO_MORE_ENTRIES)
+        status = STATUS_SUCCESS;
 
-    return STATUS_SUCCESS;
+    PhFreeStack(buffer);
+
+    return status;
 }
 
 NTSTATUS PhCreateSymbolicLinkObject(
@@ -3241,12 +3825,11 @@ VOID PhUpdateDosDevicePrefixes(
 
 // rev from FindFirstVolumeW (dmex)
 /**
- * \brief Retrieves the mount points of volumes.
+ * Retrieves the mount points of volumes.
  *
  * \param DeviceHandle A handle to the MountPointManager.
  * \param MountPoints An array of mounts.
- *
- * \return Successful or errant status.
+ * \return NTSTATUS Successful or errant status.
  */
 NTSTATUS PhGetVolumeMountPoints(
     _In_ HANDLE DeviceHandle,
@@ -3286,6 +3869,10 @@ NTSTATUS PhGetVolumeMountPoints(
         {
             outputBufferLength = outputBuffer->Size;
             PhFree(outputBuffer);
+
+            if (outputBufferLength > PH_LARGE_BUFFER_SIZE)
+                return STATUS_INSUFFICIENT_RESOURCES;
+
             outputBuffer = PhAllocate(outputBufferLength);
         }
         else
@@ -3315,7 +3902,6 @@ NTSTATUS PhGetVolumeMountPoints(
  * \param VolumeName A volume GUID path for the volume.
  * \param VolumePathNames A pointer to a buffer that receives the list of drive letters and mounted folder paths.
  * \a The list is an array of null-terminated strings terminated by an additional NULL character.
- *
  * \return Successful or errant status.
  */
 NTSTATUS PhGetVolumePathNamesForVolumeName(
@@ -3333,7 +3919,8 @@ NTSTATUS PhGetVolumePathNamesForVolumeName(
     ULONG attempts = 16;
 
     inputBufferLength = UFIELD_OFFSET(MOUNTMGR_TARGET_NAME, DeviceName[VolumeName->Length]) + sizeof(UNICODE_NULL);
-    inputBuffer = PhAllocate(inputBufferLength); // Volume{guid}, CM_Get_Device_Interface_List, SymbolicLinks, [??]
+    inputBuffer = PhAllocateStack(inputBufferLength); // Volume{guid}, CM_Get_Device_Interface_List, SymbolicLinks, [??]
+    if (!inputBuffer) return STATUS_NO_MEMORY;
     inputBuffer->DeviceNameLength = (USHORT)VolumeName->Length;
     RtlCopyMemory(inputBuffer->DeviceName, VolumeName->Buffer, VolumeName->Length);
 
@@ -3366,7 +3953,7 @@ NTSTATUS PhGetVolumePathNamesForVolumeName(
         }
         else
         {
-            PhFree(inputBuffer);
+            PhFreeStack(inputBuffer);
             PhFree(outputBuffer);
             return status;
         }
@@ -3381,7 +3968,7 @@ NTSTATUS PhGetVolumePathNamesForVolumeName(
         PhFree(outputBuffer);
     }
 
-    PhFree(inputBuffer);
+    PhFreeStack(inputBuffer);
 
     return status;
 }
@@ -3602,6 +4189,92 @@ CleanupExit:
     return status;
 }
 
+PPH_STRING PhResolveMountPrefix(
+    _In_ PCPH_STRINGREF Name
+    )
+{
+    NTSTATUS status;
+    HANDLE deviceHandle;
+    UNICODE_STRING objectName;
+    OBJECT_ATTRIBUTES objectAttributes;
+    IO_STATUS_BLOCK ioStatusBlock;
+    PMOUNTMGR_MOUNT_POINTS deviceMountPoints;
+    PPH_STRING newName = NULL;
+
+    RtlInitUnicodeString(&objectName, MOUNTMGR_DEVICE_NAME);
+    InitializeObjectAttributes(
+        &objectAttributes,
+        &objectName,
+        OBJ_CASE_INSENSITIVE,
+        NULL,
+        NULL
+        );
+
+    status = NtCreateFile(
+        &deviceHandle,
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        &objectAttributes,
+        &ioStatusBlock,
+        NULL,
+        FILE_ATTRIBUTE_NORMAL,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        FILE_OPEN,
+        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+        NULL,
+        0
+        );
+
+    if (!NT_SUCCESS(status))
+        return NULL;
+
+    status = PhGetVolumeMountPoints(
+        deviceHandle,
+        &deviceMountPoints
+        );
+
+    if (!NT_SUCCESS(status))
+        goto CleanupExit;
+
+    for (ULONG i = 0; i < deviceMountPoints->NumberOfMountPoints; i++)
+    {
+        PMOUNTMGR_MOUNT_POINT entry = &deviceMountPoints->MountPoints[i];
+        PH_STRINGREF linkPrefix = { entry->SymbolicLinkNameLength,
+            PTR_ADD_OFFSET(deviceMountPoints, entry->SymbolicLinkNameOffset)
+        };
+        PH_STRINGREF devicePrefix = { entry->DeviceNameLength,
+            PTR_ADD_OFFSET(deviceMountPoints, entry->DeviceNameOffset)
+        };
+
+        if (PhStartsWithStringRef(Name, &devicePrefix, TRUE))
+        {
+            if (PATH_IS_WIN32_DOSDEVICES_PREFIX(&linkPrefix) && linkPrefix.Buffer[1] == L'?')
+            {
+                // \??\Volume -> \\?\Volume
+                linkPrefix.Buffer[1] = OBJ_NAME_PATH_SEPARATOR;
+            }
+
+            // \\Device\\VhdHardDisk{12345678-abcd-1234-abcd-123456789abc} -> \\\\?\\Volume{12345678-abcd-1234-abcd-123456789abc}
+
+            newName = PhCreateStringEx(NULL, linkPrefix.Length + (Name->Length - devicePrefix.Length));
+            memcpy(newName->Buffer, linkPrefix.Buffer, linkPrefix.Length);
+            memcpy(
+                PTR_ADD_OFFSET(newName->Buffer, linkPrefix.Length),
+                &Name->Buffer[devicePrefix.Length / sizeof(WCHAR)],
+                Name->Length - devicePrefix.Length
+                );
+            PhTrimToNullTerminatorString(newName);
+            break;
+        }
+    }
+
+    PhFree(deviceMountPoints);
+
+CleanupExit:
+    NtClose(deviceHandle);
+
+    return newName;
+}
+
 /**
  * Resolves a NT path into a Win32 path.
  *
@@ -3712,6 +4385,12 @@ PPH_STRING PhResolveDevicePrefix(
         }
 
         PhReleaseQueuedLockShared(&PhDeviceMupPrefixesLock);
+    }
+
+    if (PhIsNullOrEmptyString(newName) && (Name->Length != 0 && Name->Buffer[0] == OBJ_NAME_PATH_SEPARATOR))
+    {
+        // We didn't find a match. Try the mount point prefixes.
+        newName = PhResolveMountPrefix(Name);
     }
 
     if (newName)
@@ -4688,7 +5367,8 @@ NTSTATUS PhEnumerateKey(
     ULONG index = 0;
 
     bufferSize = 0x100;
-    buffer = PhAllocate(bufferSize);
+    buffer = PhAllocateStack(bufferSize);
+    if (!buffer) return STATUS_NO_MEMORY;
 
     while (TRUE)
     {
@@ -4709,8 +5389,9 @@ NTSTATUS PhEnumerateKey(
 
         if (status == STATUS_BUFFER_OVERFLOW || status == STATUS_BUFFER_TOO_SMALL)
         {
-            PhFree(buffer);
-            buffer = PhAllocate(bufferSize);
+            PhFreeStack(buffer);
+            buffer = PhAllocateStack(bufferSize);
+            if (!buffer) return STATUS_NO_MEMORY;
 
             status = NtEnumerateKey(
                 KeyHandle,
@@ -4731,7 +5412,7 @@ NTSTATUS PhEnumerateKey(
         index++;
     }
 
-    PhFree(buffer);
+    PhFreeStack(buffer);
 
     return status;
 }
@@ -4749,7 +5430,8 @@ NTSTATUS PhEnumerateValueKey(
     ULONG index = 0;
 
     bufferSize = 0x100;
-    buffer = PhAllocate(bufferSize);
+    buffer = PhAllocateStack(bufferSize);
+    if (!buffer) return STATUS_NO_MEMORY;
 
     while (TRUE)
     {
@@ -4770,8 +5452,9 @@ NTSTATUS PhEnumerateValueKey(
 
         if (status == STATUS_BUFFER_OVERFLOW || status == STATUS_BUFFER_TOO_SMALL)
         {
-            PhFree(buffer);
-            buffer = PhAllocate(bufferSize);
+            PhFreeStack(buffer);
+            buffer = PhAllocateStack(bufferSize);
+            if (!buffer) return STATUS_NO_MEMORY;
 
             status = NtEnumerateValueKey(
                 KeyHandle,
@@ -4792,7 +5475,7 @@ NTSTATUS PhEnumerateValueKey(
         index++;
     }
 
-    PhFree(buffer);
+    PhFreeStack(buffer);
 
     return status;
 }
@@ -5001,6 +5684,12 @@ BOOLEAN PhDoesDirectoryExist(
 }
 
 // rev from RtlDetermineDosPathNameType_U (dmex)
+/**
+ * Determines the type of DOS path name.
+ *
+ * \param FileName A reference to the file name string.
+ * \return The type of the DOS path name.
+ */
 RTL_PATH_TYPE PhDetermineDosPathNameType(
     _In_ PCPH_STRINGREF FileName
     )
@@ -5529,6 +6218,7 @@ NTSTATUS PhCopyFileWin32(
     FILE_BASIC_INFORMATION basicInfo;
     LARGE_INTEGER newFileSize;
     IO_STATUS_BLOCK isb;
+    ULONG bufferLength;
     PBYTE buffer;
 
     status = PhCreateFileWin32(
@@ -5569,7 +6259,8 @@ NTSTATUS PhCopyFileWin32(
     if (!NT_SUCCESS(status))
         goto CleanupExit;
 
-    buffer = PhAllocatePage(PAGE_SIZE * 2, NULL);
+    bufferLength = PAGE_SIZE * 2;
+    buffer = PhAllocatePage(bufferLength, NULL);
 
     if (!buffer)
     {
@@ -5586,7 +6277,7 @@ NTSTATUS PhCopyFileWin32(
             NULL,
             &isb,
             buffer,
-            PAGE_SIZE * 2,
+            bufferLength,
             NULL,
             NULL
             );
@@ -5958,7 +6649,9 @@ NTSTATUS PhMoveFileWin32(
     }
 
     renameInfoLength = sizeof(FILE_RENAME_INFORMATION) + newFileName.Length + sizeof(UNICODE_NULL);
-    renameInfo = PhAllocateZero(renameInfoLength);
+    renameInfo = PhAllocateStack(renameInfoLength);
+    if (!renameInfo) return STATUS_NO_MEMORY;
+    memset(renameInfo, 0, renameInfoLength);
     renameInfo->ReplaceIfExists = FailIfExists ? FALSE : TRUE;
     renameInfo->RootDirectory = NULL;
     renameInfo->FileNameLength = newFileName.Length;
@@ -6061,7 +6754,7 @@ NTSTATUS PhMoveFileWin32(
 
 CleanupExit:
     NtClose(fileHandle);
-    PhFree(renameInfo);
+    PhFreeStack(renameInfo);
 
     return status;
 }
@@ -6079,7 +6772,7 @@ NTSTATUS PhGetProcessHeapSignature(
     if (WindowsVersion >= WINDOWS_7)
     {
         // dt _HEAP SegmentSignature
-        status = NtReadVirtualMemory(
+        status = PhReadVirtualMemory(
             ProcessHandle,
             PTR_ADD_OFFSET(HeapAddress, IsWow64 ? 0x8 : 0x10),
             &heapSignature,
@@ -6110,7 +6803,7 @@ NTSTATUS PhGetProcessHeapFrontEndType(
     if (WindowsVersion >= WINDOWS_10)
     {
         // dt _HEAP FrontEndHeapType
-        status = NtReadVirtualMemory(
+        status = PhReadVirtualMemory(
             ProcessHandle,
             PTR_ADD_OFFSET(HeapAddress, IsWow64 ? 0x0ea : 0x1a2),
             &heapFrontEndType,
@@ -6120,7 +6813,7 @@ NTSTATUS PhGetProcessHeapFrontEndType(
     }
     else if (WindowsVersion >= WINDOWS_8_1)
     {
-        status = NtReadVirtualMemory(
+        status = PhReadVirtualMemory(
             ProcessHandle,
             PTR_ADD_OFFSET(HeapAddress, IsWow64 ? 0x0d6 : 0x17a),
             &heapFrontEndType,
@@ -6130,7 +6823,7 @@ NTSTATUS PhGetProcessHeapFrontEndType(
     }
     else if (WindowsVersion >= WINDOWS_7)
     {
-        status = NtReadVirtualMemory(
+        status = PhReadVirtualMemory(
             ProcessHandle,
             PTR_ADD_OFFSET(HeapAddress, IsWow64 ? 0x0da : 0x182),
             &heapFrontEndType,
@@ -6314,13 +7007,12 @@ NTSTATUS PhQueryProcessHeapInformation(
 
 NTSTATUS PhQueryProcessLockInformation(
     _In_ HANDLE ProcessId,
-    _Out_ PULONG NumberOfLocks,
-    _Out_ PRTL_PROCESS_LOCK_INFORMATION* Locks
+    _In_ PPH_ENUM_PROCESS_LOCKS Callback,
+    _In_opt_ PVOID Context
     )
 {
     NTSTATUS status;
     PRTL_DEBUG_INFORMATION debugBuffer = NULL;
-    PH_ARRAY array;
 
     for (ULONG i = 0x400000; ; i *= 2) // rev from Heap32First/Heap32Next (dmex)
     {
@@ -6366,19 +7058,18 @@ NTSTATUS PhQueryProcessLockInformation(
         return STATUS_UNSUCCESSFUL;
     }
 
-    PhInitializeArray(&array, sizeof(RTL_PROCESS_LOCK_INFORMATION), debugBuffer->Locks->NumberOfLocks);
+    status = Callback(
+        debugBuffer->Locks->NumberOfLocks,
+        debugBuffer->Locks->Locks,
+        Context
+        );
 
-    for (ULONG i = 0; i < debugBuffer->Locks->NumberOfLocks; i++)
+    if (debugBuffer)
     {
-        PhAddItemArray(&array, &debugBuffer->Locks->Locks[i]);
+        RtlDestroyQueryDebugBuffer(debugBuffer);
     }
 
-    *NumberOfLocks = (ULONG)PhFinalArrayCount(&array);
-    *Locks = PhFinalArrayItems(&array);
-
-    RtlDestroyQueryDebugBuffer(debugBuffer);
-
-    return STATUS_SUCCESS;
+    return status;
 }
 
 // Queries if the specified architecture is supported on the current system,
@@ -6433,9 +7124,9 @@ BOOLEAN PhIsFirmwareSupported(
     VOID
     )
 {
-    UNICODE_STRING variableName = RTL_CONSTANT_STRING(L" ");
+    static CONST UNICODE_STRING variableName = RTL_CONSTANT_STRING(L" ");
+    static CONST GUID vendorGuid = { 0 };
     ULONG variableValueLength = 0;
-    GUID vendorGuid = { 0 };
 
     if (NtQuerySystemEnvironmentValueEx(
         &variableName,
@@ -6795,7 +7486,7 @@ NTSTATUS PhFreezeProcess(
 {
     NTSTATUS status;
     OBJECT_ATTRIBUTES objectAttributes;
-    HANDLE processStateChangeHandle;
+    HANDLE processStateChangeHandle = NULL;
 
     if (!(NtCreateProcessStateChange_Import() && NtChangeProcessState_Import()))
         return STATUS_PROCEDURE_NOT_FOUND;
@@ -6927,7 +7618,7 @@ NTSTATUS PhFreezeThread(
 {
     NTSTATUS status;
     OBJECT_ATTRIBUTES objectAttributes;
-    HANDLE threadStateChangeHandle;
+    HANDLE threadStateChangeHandle = NULL;
 
     if (!(NtCreateThreadStateChange_Import() && NtChangeThreadState_Import()))
     {
@@ -7228,7 +7919,7 @@ static ULONG NTAPI PhKnownDllsHashtableHashFunction(
 }
 
 _Function_class_(PH_ENUM_DIRECTORY_OBJECTS)
-static BOOLEAN NTAPI PhpKnownDllObjectsCallback(
+static NTSTATUS NTAPI PhpKnownDllObjectsCallback(
     _In_ HANDLE RootDirectory,
     _In_ PPH_STRINGREF Name,
     _In_ PPH_STRINGREF TypeName,
@@ -7244,7 +7935,7 @@ static BOOLEAN NTAPI PhpKnownDllObjectsCallback(
     PPH_STRING fileName;
 
     if (!PhStringRefToUnicodeString(Name, &objectName))
-        return TRUE;
+        goto CleanupExit;
 
     InitializeObjectAttributes(
         &objectAttributes,
@@ -7261,7 +7952,7 @@ static BOOLEAN NTAPI PhpKnownDllObjectsCallback(
         );
 
     if (!NT_SUCCESS(status))
-        return TRUE;
+        goto CleanupExit;
 
     baseAddress = NULL;
     viewSize = PAGE_SIZE;
@@ -7281,7 +7972,7 @@ static BOOLEAN NTAPI PhpKnownDllObjectsCallback(
     NtClose(sectionHandle);
 
     if (!NT_SUCCESS(status))
-        return TRUE;
+        goto CleanupExit;
 
     status = PhGetProcessMappedFileName(
         NtCurrentProcess(),
@@ -7300,23 +7991,21 @@ static BOOLEAN NTAPI PhpKnownDllObjectsCallback(
         PhAddEntryHashtable(PhKnownDllsHashtable, &entry);
     }
 
-    return TRUE;
+CleanupExit:
+    return STATUS_SUCCESS; // continue enumeration (dmex)
 }
 
 VOID PhInitializeKnownDlls(
-    _In_ PCWSTR ObjectName
+    _In_ PCPH_STRINGREF ObjectName
     )
 {
-    PH_STRINGREF directoryName;
     HANDLE directoryHandle;
-
-    PhInitializeStringRef(&directoryName, ObjectName);
 
     if (NT_SUCCESS(PhOpenDirectoryObject(
         &directoryHandle,
         DIRECTORY_QUERY,
         NULL,
-        &directoryName
+        ObjectName
         )))
     {
         PhEnumDirectoryObjects(
@@ -7334,6 +8023,13 @@ BOOLEAN PhInitializeKnownDllsTable(
 {
     if (PhBeginInitOnce(&PhKnownDllsInitOnce))
     {
+        static const PH_STRINGREF KnownDllsObjectName = PH_STRINGREF_INIT(L"\\KnownDlls");
+        static const PH_STRINGREF KnownDlls32ObjectName = PH_STRINGREF_INIT(L"\\KnownDlls32");
+#ifdef _ARM64_
+        static const PH_STRINGREF KnownDllsArm32ObjectName = PH_STRINGREF_INIT(L"\\KnownDllsArm32");
+        static const PH_STRINGREF KnownDllsChpe32ObjectName = PH_STRINGREF_INIT(L"\\KnownDllsChpe32");
+#endif
+
         PhKnownDllsHashtable = PhCreateHashtable(
             sizeof(PH_KNOWNDLL_CACHE_ENTRY),
             PhKnownDllsHashtableEqualFunction,
@@ -7341,11 +8037,11 @@ BOOLEAN PhInitializeKnownDllsTable(
             10
             );
 
-        PhInitializeKnownDlls(L"\\KnownDlls");
-        PhInitializeKnownDlls(L"\\KnownDlls32");
+        PhInitializeKnownDlls(&KnownDllsObjectName);
+        PhInitializeKnownDlls(&KnownDlls32ObjectName);
 #ifdef _ARM64_
-        PhInitializeKnownDlls(L"\\KnownDllsArm32");
-        PhInitializeKnownDlls(L"\\KnownDllsChpe32");
+        PhInitializeKnownDlls(&KnownDllsArm32ObjectName);
+        PhInitializeKnownDlls(&KnownDllsChpe32ObjectName);
 #endif
         PhEndInitOnce(&PhKnownDllsInitOnce);
     }
@@ -7370,6 +8066,95 @@ BOOLEAN PhIsKnownDllFileName(
     }
 
     return FALSE;
+}
+
+NTSTATUS PhGetSystemProcessorPerformanceDistribution(
+    _Out_ PSYSTEM_PROCESSOR_PERFORMANCE_DISTRIBUTION *Buffer
+    )
+{
+    NTSTATUS status;
+    PVOID buffer;
+    ULONG bufferSize;
+    ULONG attempts;
+
+    bufferSize = 0x100;
+    buffer = PhAllocate(bufferSize);
+
+    status = NtQuerySystemInformation(
+        SystemProcessorPerformanceDistribution,
+        buffer,
+        bufferSize,
+        &bufferSize
+        );
+    attempts = 0;
+
+    while (status == STATUS_INFO_LENGTH_MISMATCH && attempts < 8)
+    {
+        PhFree(buffer);
+        buffer = PhAllocate(bufferSize);
+
+        status = NtQuerySystemInformation(
+            SystemProcessorPerformanceDistribution,
+            buffer,
+            bufferSize,
+            &bufferSize
+            );
+        attempts++;
+    }
+
+    if (NT_SUCCESS(status))
+        *Buffer = buffer;
+    else
+        PhFree(buffer);
+
+    return status;
+}
+
+NTSTATUS PhGetSystemProcessorPerformanceDistributionEx(
+    _In_ USHORT ProcessorGroup,
+    _Out_ PSYSTEM_PROCESSOR_PERFORMANCE_DISTRIBUTION *Buffer
+    )
+{
+    NTSTATUS status;
+    PVOID buffer;
+    ULONG bufferSize;
+    ULONG attempts;
+
+    bufferSize = 0x100;
+    buffer = PhAllocate(bufferSize);
+
+    status = NtQuerySystemInformationEx(
+        SystemProcessorPerformanceDistribution,
+        &ProcessorGroup,
+        sizeof(USHORT),
+        buffer,
+        bufferSize,
+        &bufferSize
+        );
+    attempts = 0;
+
+    while (status == STATUS_INFO_LENGTH_MISMATCH && attempts < 8)
+    {
+        PhFree(buffer);
+        buffer = PhAllocate(bufferSize);
+
+        status = NtQuerySystemInformationEx(
+            SystemProcessorPerformanceDistribution,
+            &ProcessorGroup,
+            sizeof(USHORT),
+            buffer,
+            bufferSize,
+            &bufferSize
+            );
+        attempts++;
+    }
+
+    if (NT_SUCCESS(status))
+        *Buffer = buffer;
+    else
+        PhFree(buffer);
+
+    return status;
 }
 
 NTSTATUS PhGetSystemLogicalProcessorInformation(
@@ -8098,7 +8883,6 @@ NTSTATUS PhSystemCompressionStoreTrimRequest(
     memset(&trimRequestInfo, 0, sizeof(SM_SYSTEM_STORE_TRIM_REQUEST));
     trimRequestInfo.Version = SYSTEM_STORE_TRIM_INFORMATION_VERSION_V1;
     trimRequestInfo.PagesToTrim = BYTES_TO_PAGES(compressionInfo.WorkingSetSize);
-    //trimRequestInfo.PartitionHandle = MEMORY_CURRENT_PARTITION_HANDLE;
 
     memset(&storeInfo, 0, sizeof(SYSTEM_STORE_INFORMATION));
     storeInfo.Version = SYSTEM_STORE_INFORMATION_VERSION;
@@ -8123,12 +8907,17 @@ NTSTATUS PhSystemCompressionStoreHighMemoryPriorityRequest(
 {
     NTSTATUS status;
     SYSTEM_STORE_INFORMATION storeInfo;
-    SM_STORE_HIGH_MEMORY_PRIORITY_REQUEST memoryPriorityInfo;
+    SM_STORE_MEMORY_PRIORITY_REQUEST memoryPriorityInfo;
 
-    memset(&memoryPriorityInfo, 0, sizeof(SM_STORE_HIGH_MEMORY_PRIORITY_REQUEST));
-    memoryPriorityInfo.Version = SYSTEM_STORE_HIGH_MEM_PRIORITY_INFORMATION_VERSION;
-    memoryPriorityInfo.SetHighMemoryPriority = SetHighMemoryPriority;
+    memset(&memoryPriorityInfo, 0, sizeof(SM_STORE_MEMORY_PRIORITY_REQUEST));
+    memoryPriorityInfo.Version = SYSTEM_STORE_PRIORITY_REQUEST_VERSION;
+    memoryPriorityInfo.Flags = SYSTEM_STORE_PRIORITY_FLAG_REQUIRE_HANDLE;
     memoryPriorityInfo.ProcessHandle = ProcessHandle;
+
+    if (SetHighMemoryPriority)
+    {
+        SetFlag(memoryPriorityInfo.Flags, SYSTEM_STORE_PRIORITY_FLAG_SET_PRIORITY);
+    }
 
     memset(&storeInfo, 0, sizeof(SYSTEM_STORE_INFORMATION));
     storeInfo.Version = SYSTEM_STORE_INFORMATION_VERSION;
@@ -8146,6 +8935,12 @@ NTSTATUS PhSystemCompressionStoreHighMemoryPriorityRequest(
     return status;
 }
 
+/**
+ * Retrieves the current size limits for the working set of the virtual memory manager system cache.
+ *
+ * \param CacheInfo A pointer to a variable that receives the file cache information.
+ * \return Successful or errant status.
+ */
 NTSTATUS PhGetSystemFileCacheSize(
     _Out_ PSYSTEM_FILECACHE_INFORMATION CacheInfo
     )
@@ -8159,6 +8954,16 @@ NTSTATUS PhGetSystemFileCacheSize(
 }
 
 // rev from SetSystemFileCacheSize (MSDN) (dmex)
+/**
+ * Limits the size of the working set of the virtual memory manager system cache.
+ *
+ * \param CacheInfo The minimum size of the file cache, in bytes. The virtual memory manager
+ * attempts to keep at least this much memory resident in the system file cache.
+ * \param CacheInfo The maximum size of the file cache, in bytes. The virtual memory manager
+ * enforces this limit only if this call or a previous call to SetSystemFileCacheSize
+ * specifies FILE_CACHE_MAX_HARD_ENABLE.
+ * \return Successful or errant status.
+ */
 NTSTATUS PhSetSystemFileCacheSize(
     _In_ SIZE_T MinimumFileCacheSize,
     _In_ SIZE_T MaximumFileCacheSize,
@@ -8182,6 +8987,16 @@ NTSTATUS PhSetSystemFileCacheSize(
     return status;
 }
 
+/**
+ * Creates an event object, sets the initial state of the event to the specified value,
+ * and opens a handle to the object with the specified desired access.
+ *
+ * \param EventHandle A pointer to a variable that receives the event object handle.
+ * \param DesiredAccess The access mask that specifies the requested access to the event object.
+ * \param EventType The type of the event, which can be SynchronizationEvent or a NotificationEvent.
+ * \param InitialState The initial state of the event object.
+ * \return NTSTATUS Successful or errant status.
+ */
 NTSTATUS PhCreateEvent(
     _Out_ PHANDLE EventHandle,
     _In_ ACCESS_MASK DesiredAccess,
@@ -8217,7 +9032,18 @@ NTSTATUS PhCreateEvent(
     return status;
 }
 
-// rev from DeviceIoControl (dmex)
+/**
+ * Sends a control code directly to a specified device driver, causing the corresponding device to perform the corresponding operation.
+ *
+ * \param DeviceHandle A handle to the device on which the operation is to be performed.
+ * \param IoControlCode The control code for the operation. This value identifies the specific operation to be performed and the type of device on which to perform it.
+ * \param InputBuffer A pointer to the input buffer that contains the data required to perform the operation.
+ * \param InputBufferLength The size of the input buffer, in bytes.
+ * \param OutputBuffer A pointer to the output buffer that is to receive the data returned by the operation.
+ * \param OutputBufferLength The size of the output buffer, in bytes.
+ * \param ReturnLength A pointer to a variable that receives the size of the data stored in the output buffer, in bytes.
+ * \return NTSTATUS Successful or errant status.
+ */
 NTSTATUS PhDeviceIoControlFile(
     _In_ HANDLE DeviceHandle,
     _In_ ULONG IoControlCode,
@@ -8566,7 +9392,6 @@ NTSTATUS PhEnumVirtualMemoryPages(
  * \param Size The total number of pages to query from the base address.
  * \param Callback A callback function which is executed for each memory page.
  * \param Context A user-defined value to pass to the callback function.
- *
  * \return Successful or errant status.
  */
 NTSTATUS PhEnumVirtualMemoryAttributes(
@@ -8823,7 +9648,7 @@ NTSTATUS PhEnumProcessEnclaves(
     LIST_ENTRY enclaveList;
     LDR_SOFTWARE_ENCLAVE enclave;
 
-    status = NtReadVirtualMemory(
+    status = PhReadVirtualMemory(
         ProcessHandle,
         LdrEnclaveList,
         &enclaveList,
@@ -8841,7 +9666,7 @@ NTSTATUS PhEnumProcessEnclaves(
 
         enclaveAddress = CONTAINING_RECORD(link, LDR_SOFTWARE_ENCLAVE, Links);
 
-        status = NtReadVirtualMemory(
+        status = PhReadVirtualMemory(
             ProcessHandle,
             link,
             &enclave,
@@ -9157,7 +9982,7 @@ NTSTATUS PhIsEcCode(
     if (!NT_SUCCESS(status = PhGetProcessPeb(ProcessHandle, &pebBaseAddress)))
         return status;
 
-    if (!NT_SUCCESS(status = NtReadVirtualMemory(
+    if (!NT_SUCCESS(status = PhReadVirtualMemory(
         ProcessHandle,
         PTR_ADD_OFFSET(pebBaseAddress, FIELD_OFFSET(PEB, EcCodeBitMap)),
         &ecCodeBitMap,
@@ -9172,7 +9997,7 @@ NTSTATUS PhIsEcCode(
     // each byte of bitmap indexes 8*4K = 2^15 byte span
     ecCodeBitMap = PTR_ADD_OFFSET(ecCodeBitMap, (ULONG_PTR)CodePointer >> 15);
 
-    if (!NT_SUCCESS(status = NtReadVirtualMemory(
+    if (!NT_SUCCESS(status = PhReadVirtualMemory(
         ProcessHandle,
         ecCodeBitMap,
         &bitmap,

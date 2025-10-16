@@ -100,7 +100,7 @@ PhQueueUserWorkItem(
 //
 
 PHLIBAPI
-ULONGLONG
+ULONG64
 NTAPI
 PhReadTimeStampCounter(
     VOID
@@ -233,6 +233,7 @@ PHLIBAPI
 _Must_inspect_result_
 _Ret_maybenull_
 _Post_writable_byte_size_(Size)
+_Success_(return != NULL)
 DECLSPEC_ALLOCATOR
 DECLSPEC_NOALIAS
 DECLSPEC_RESTRICT
@@ -246,6 +247,7 @@ PHLIBAPI
 _Must_inspect_result_
 _Ret_maybenull_
 _Post_writable_byte_size_(Size)
+_Success_(return != NULL)
 DECLSPEC_ALLOCATOR
 DECLSPEC_NOALIAS
 DECLSPEC_RESTRICT
@@ -266,7 +268,6 @@ PhFree(
 PHLIBAPI
 _May_raise_
 _Post_writable_byte_size_(Size)
-_Success_(return != NULL)
 DECLSPEC_ALLOCATOR
 DECLSPEC_NOALIAS
 DECLSPEC_RESTRICT
@@ -391,6 +392,28 @@ PhProtectVirtualMemory(
     _Out_opt_ PULONG OldProtection
     );
 
+PHLIBAPI
+NTSTATUS
+NTAPI
+PhReadVirtualMemory(
+    _In_ HANDLE ProcessHandle,
+    _In_opt_ PVOID BaseAddress,
+    _Out_writes_bytes_(BufferSize) PVOID Buffer,
+    _In_ SIZE_T BufferSize,
+    _Out_opt_ PSIZE_T NumberOfBytesRead
+    );
+
+PHLIBAPI
+NTSTATUS
+NTAPI
+PhWriteVirtualMemory(
+    _In_ HANDLE ProcessHandle,
+    _In_opt_ PVOID BaseAddress,
+    _In_reads_bytes_(NumberOfBytesToWrite) PVOID Buffer,
+    _In_ SIZE_T NumberOfBytesToWrite,
+    _Out_opt_ PSIZE_T NumberOfBytesWritten
+    );
+
 FORCEINLINE
 PVOID
 PhAllocateCopy(
@@ -455,25 +478,9 @@ PhReAllocateZeroSafe(
     return NULL;
 }
 
-FORCEINLINE
-PVOID
-NTAPI
-PhAllocateStack(
-    _In_ SIZE_T Size
-    )
-{
-    return _malloca(Size);
-}
+#define PhAllocateStack(Size) _malloca(Size)
 
-FORCEINLINE
-VOID
-NTAPI
-PhFreeStack(
-    _Pre_maybenull_ _Post_invalid_ PVOID Memory
-    )
-{
-    _freea(Memory);
-}
+#define PhFreeStack(Memory) _freea(Memory)
 
 //
 // Singly linked list
@@ -483,7 +490,7 @@ PhFreeStack(
 /**
  * The PhInitializeSListHead function initializes a sequenced singly linked listhead.
  *
- * \param SListHead A pointer to a sequenced singly linked listhead.
+ * \param ListHead A pointer to a sequenced singly linked listhead.
  */
 FORCEINLINE
 VOID
@@ -506,7 +513,7 @@ PhInitializeSListHead(
 /**
  * The PhQueryDepthSList function queries the current number of entries contained in a sequenced single linked list.
  *
- * \param SListHead A pointer to a sequenced singly linked listhead.
+ * \param ListHead A pointer to a sequenced singly linked listhead.
  * \return The current number of entries in the sequenced singly linked list is returned as the function value.
  */
 FORCEINLINE
@@ -1839,8 +1846,8 @@ PhGetString(
  * contained in the provided `PPH_STRING` object. If the input string object is
  * `NULL`, it initializes and returns an empty `PH_STRINGREF`.
  *
- * @param String A pointer to a `PPH_STRING` object. This parameter is optional and can be `NULL`.
- * @return A `PH_STRINGREF` structure that references the string in the provided `PPH_STRING` object,
+ * \param String A pointer to a `PPH_STRING` object. This parameter is optional and can be `NULL`.
+ * \return A `PH_STRINGREF` structure that references the string in the provided `PPH_STRING` object,
  *         or an empty `PH_STRINGREF` if the input is `NULL`.
  */
 FORCEINLINE
@@ -1865,8 +1872,8 @@ PhGetStringRef(
  * This function checks if the provided PPH_STRINGREF structure is not NULL. If it is not NULL, it returns the buffer
  * contained within the structure. If the structure is NULL, it returns an empty string.
  *
- * @param String A pointer to a PPH_STRINGREF structure. This parameter is optional and can be NULL.
- * @return A pointer to the buffer contained within the PPH_STRINGREF structure if it is not NULL, otherwise an empty string.
+ * \param String A pointer to a PPH_STRINGREF structure. This parameter is optional and can be NULL.
+ * \return A pointer to the buffer contained within the PPH_STRINGREF structure if it is not NULL, otherwise an empty string.
  */
 FORCEINLINE
 PCWSTR
@@ -1925,31 +1932,47 @@ PhGetStringOrDefault(
  *
  * \param String A pointer to a string object.
  */
-//_Check_return_
-//_Success_(((String != NULL && String->Length != 0) && return == 1))
-//_When_(String != NULL && String->Length != 0 && return == 1, _At_(String, _Post_valid_ _Post_notnull_))
-//FORCEINLINE
-//BOOLEAN
-//PhIsNullOrEmptyString(
-//    _In_opt_ PPH_STRING String
-//    )
-//{
-//    return !String || String->Length == 0;
-//}
+_Success_(return == FALSE)
+_At_(String, _When_(return == FALSE, _Notnull_))
+FORCEINLINE
+BOOLEAN
+PhIsNullOrEmptyString(
+    _In_opt_ PPH_STRING String
+    )
+{
+    if (String == NULL)
+        return TRUE;
 
+    return String->Length == 0;
+}
+
+/**
+ * Determines whether a STRINGREF is null or empty.
+ *
+ * \param String A pointer to a string object.
+ */
+_Success_(return == FALSE)
+_At_(String, _When_(return == FALSE, _Notnull_))
 FORCEINLINE
 BOOLEAN
 PhIsNullOrEmptyStringRef(
-    _Pre_maybenull_ PCPH_STRINGREF String
+    _In_opt_ PCPH_STRINGREF String
     )
 {
     return !(String && String->Length);
 }
 
-// VS2019 can't parse the inline bool check for the above PhIsNullOrEmptyString
-// inline function creating invalid C6387 warnings using the input string (dmex)
+// The MSVC static analyzer can misinterpret the _In_opt_ SAL for String on PhIsNullOrEmptyString and raise C6387.
+// Provide a macro override during analysis to avoid the false positive while preserving semantics.
+#if (defined(_PREFAST_) || defined(_MSC_ANALYSIS))
+#undef PhIsNullOrEmptyString
 #define PhIsNullOrEmptyString(string) \
-    (!(string) || (string)->Length == 0)
+    ((!(string)) || ((string)->Length == 0))
+
+#undef PhIsNullOrEmptyStringRef
+#define PhIsNullOrEmptyStringRef(string) \
+    ((!(string)) || ((string)->Length == 0))
+#endif
 
 /**
  * Duplicates a string.
@@ -2044,11 +2067,11 @@ PhCompareStringWithNull(
  * If `String1` is null and `String2` is not null, the function returns 0 if `String2` is also null, or 1 or -1 based on the specified `Order` (AscendingSortOrder or DescendingSortOrder).
  * If `String1` is not null and `String2` is null, the function returns -1 or 1 based on the specified `Order`.
  *
- * @param String1 The first string to compare.
- * @param String2 The second string to compare.
- * @param Order The sort order to use for the comparison (AscendingSortOrder or DescendingSortOrder).
- * @param IgnoreCase Specifies whether the comparison should be case-insensitive (TRUE) or case-sensitive (FALSE).
- * @return Returns a negative value if `String1` is less than `String2`, a positive value if `String1` is greater than `String2`, or 0 if they are equal.
+ * \param String1 The first string to compare.
+ * \param String2 The second string to compare.
+ * \param Order The sort order to use for the comparison (AscendingSortOrder or DescendingSortOrder).
+ * \param IgnoreCase Specifies whether the comparison should be case-insensitive (TRUE) or case-sensitive (FALSE).
+ * \return Returns a negative value if `String1` is less than `String2`, a positive value if `String1` is greater than `String2`, or 0 if they are equal.
  */
 FORCEINLINE
 LONG
@@ -2081,11 +2104,11 @@ PhCompareStringWithNullSortOrder(
  * If `String1` is null and `String2` is not null, the function returns 0 if `String2` is also null, or 1 if `String2` is not null, depending on the specified sort order.
  * If `String1` is not null and `String2` is null, the function returns -1 or 1, depending on the specified sort order.
  *
- * @param String1 The first string to compare. Can be null.
- * @param String2 The second string to compare. Can be null.
- * @param Order The sort order to use for the comparison. Must be either `AscendingSortOrder` or `DescendingSortOrder`.
- * @param IgnoreCase Specifies whether the comparison should be case-insensitive (`true`) or case-sensitive (`false`).
- * @return The result of the comparison. Returns a negative value if `String1` is less than `String2`, 0 if they are equal, or a positive value if `String1` is greater than `String2`.
+ * \param String1 The first string to compare. Can be null.
+ * \param String2 The second string to compare. Can be null.
+ * \param Order The sort order to use for the comparison. Must be either `AscendingSortOrder` or `DescendingSortOrder`.
+ * \param IgnoreCase Specifies whether the comparison should be case-insensitive (`true`) or case-sensitive (`false`).
+ * \return The result of the comparison. Returns a negative value if `String1` is less than `String2`, 0 if they are equal, or a positive value if `String1` is greater than `String2`.
  */
 FORCEINLINE
 LONG
@@ -2444,6 +2467,7 @@ PhCreateBytesEx(
 
 FORCEINLINE
 PPH_BYTES
+NTAPI
 PhCreateBytes2(
     _In_ PPH_BYTESREF Bytes
     )
@@ -2451,12 +2475,16 @@ PhCreateBytes2(
     return PhCreateBytesEx(Bytes->Buffer, Bytes->Length);
 }
 
-PPH_BYTES PhFormatBytes_V(
+PPH_BYTES
+NTAPI
+PhFormatBytes_V(
     _In_ _Printf_format_string_ PCSTR Format,
     _In_ va_list ArgPtr
     );
 
-PPH_BYTES PhFormatBytes(
+PPH_BYTES
+NTAPI
+PhFormatBytes(
     _In_ _Printf_format_string_ PCSTR Format,
     ...
     );
@@ -4312,6 +4340,16 @@ DECLSPEC_NOALIAS
 PHLIBAPI
 VOID
 NTAPI
+PhConvertCopyMemoryUlong64(
+    _Inout_updates_(Count) PULONG64 From,
+    _Inout_updates_(Count) PFLOAT To,
+    _In_ SIZE_T Count
+    );
+
+DECLSPEC_NOALIAS
+PHLIBAPI
+VOID
+NTAPI
 PhConvertCopyMemorySingles(
     _Inout_updates_(Count) PFLOAT From,
     _Inout_updates_(Count) PULONG To,
@@ -4319,6 +4357,7 @@ PhConvertCopyMemorySingles(
     );
 
 typedef struct _PH_CIRCULAR_BUFFER_ULONG* PPH_CIRCULAR_BUFFER_ULONG;
+typedef struct _PH_CIRCULAR_BUFFER_ULONG64* PPH_CIRCULAR_BUFFER_ULONG64;
 
 DECLSPEC_NOALIAS
 PHLIBAPI
@@ -4326,6 +4365,16 @@ VOID
 NTAPI
 PhCopyConvertCircularBufferULONG(
     _Inout_ PPH_CIRCULAR_BUFFER_ULONG Buffer,
+    _Out_writes_(Count) FLOAT* Destination,
+    _In_ ULONG Count
+    );
+
+DECLSPEC_NOALIAS
+PHLIBAPI
+VOID
+NTAPI
+PhCopyConvertCircularBufferULONG64(
+    _Inout_ PPH_CIRCULAR_BUFFER_ULONG64 Buffer,
     _Out_writes_(Count) FLOAT* Destination,
     _In_ ULONG Count
     );
@@ -4821,7 +4870,7 @@ PhInitFormatI64XPadZeroes(
     Format->Type = UInt64FormatType | FormatUseRadix | FormatPadZeros;
     Format->u.UInt64 = UInt64;
     Format->Radix = 16;
-    Format->Width = sizeof(ULONG64) * 2;
+    Format->Width = Width;
 }
 
 FORCEINLINE

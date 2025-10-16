@@ -35,6 +35,7 @@ static BOOLEAN NetworkFirstTime = TRUE;
 static BOOLEAN NetworkTreeListLoaded = FALSE;
 static PPH_TN_FILTER_ENTRY NetworkFilterEntry = NULL;
 
+_Function_class_(PH_MAIN_TAB_PAGE_CALLBACK)
 BOOLEAN PhMwpNetworkPageCallback(
     _In_ PPH_MAIN_TAB_PAGE Page,
     _In_ PH_MAIN_TAB_PAGE_MESSAGE Message,
@@ -191,6 +192,7 @@ VOID PhMwpToggleNetworkWaitingConnectionTreeFilter(
     PhSetIntegerSetting(L"HideWaitingConnections", !!NetworkFilterEntry);
 }
 
+_Function_class_(PH_TN_FILTER_FUNCTION)
 BOOLEAN PhMwpNetworkTreeFilter(
     _In_ PPH_TREENEW_NODE Node,
     _In_opt_ PVOID Context
@@ -212,7 +214,7 @@ VOID PhMwpInitializeNetworkMenu(
     _In_ ULONG NumberOfNetworkItems
     )
 {
-    ULONG i;
+    //ULONG i;
     PPH_EMENU_ITEM item;
 
     if (NumberOfNetworkItems == 0)
@@ -239,25 +241,25 @@ VOID PhMwpInitializeNetworkMenu(
     }
 
     // Close
-    if (NumberOfNetworkItems != 0)
-    {
-        BOOLEAN closeOk = TRUE;
-
-        for (i = 0; i < NumberOfNetworkItems; i++)
-        {
-            if (
-                NetworkItems[i]->ProtocolType != PH_NETWORK_PROTOCOL_TCP4 ||
-                NetworkItems[i]->State != MIB_TCP_STATE_ESTAB
-                )
-            {
-                closeOk = FALSE;
-                break;
-            }
-        }
-
-        if (!closeOk)
-            PhEnableEMenuItem(Menu, ID_NETWORK_CLOSE, FALSE);
-    }
+    //if (NumberOfNetworkItems != 0)
+    //{
+    //    BOOLEAN closeOk = TRUE;
+    //
+    //    for (i = 0; i < NumberOfNetworkItems; i++)
+    //    {
+    //        if (
+    //            NetworkItems[i]->ProtocolType != PH_NETWORK_PROTOCOL_TCP4 ||
+    //            NetworkItems[i]->State != MIB_TCP_STATE_ESTAB
+    //            )
+    //        {
+    //            closeOk = FALSE;
+    //            break;
+    //        }
+    //    }
+    //
+    //    if (!closeOk)
+    //        PhEnableEMenuItem(Menu, ID_NETWORK_CLOSE, FALSE);
+    //}
 }
 
 VOID PhShowNetworkContextMenu(

@@ -391,8 +391,8 @@ NTSTATUS EtQueryAdapterAttributes(
     _Out_ PET_ADAPTER_ATTRIBUTES Attributes
     )
 {
-    static PH_STRINGREF dxCoreAttributes = PH_STRINGREF_INIT(L"DXCoreAttributes");
-    static PH_STRINGREF dxAttributes = PH_STRINGREF_INIT(L"DXAttributes");
+    static const PH_STRINGREF dxCoreAttributes = PH_STRINGREF_INIT(L"DXCoreAttributes");
+    static const PH_STRINGREF dxAttributes = PH_STRINGREF_INIT(L"DXAttributes");
     NTSTATUS status;
     D3DDDI_QUERYREGISTRY_INFO* adapterAttributes;
     PWSTR attributes;
@@ -814,13 +814,13 @@ BOOLEAN EtIsSoftwareDevice(
 }
 
 PPH_STRING EtGetNodeEngineTypeString(
-    _In_ D3DKMT_NODEMETADATA NodeMetaData
+    _In_ D3DKMT_NODEMETADATA* NodeMetaData
     )
 {
-    switch (NodeMetaData.NodeData.EngineType)
+    switch (NodeMetaData->NodeData.EngineType)
     {
     case DXGK_ENGINE_TYPE_OTHER:
-        return PhCreateString(NodeMetaData.NodeData.FriendlyName);
+        return PhCreateString(NodeMetaData->NodeData.FriendlyName);
     case DXGK_ENGINE_TYPE_3D:
         return PhCreateString(L"3D");
     case DXGK_ENGINE_TYPE_VIDEO_DECODE:
@@ -837,9 +837,11 @@ PPH_STRING EtGetNodeEngineTypeString(
         return PhCreateString(L"Overlay");
     case DXGK_ENGINE_TYPE_CRYPTO:
         return PhCreateString(L"Crypto");
+    case DXGK_ENGINE_TYPE_VIDEO_CODEC:
+        return PhCreateString(L"Video Codec");
     }
 
-    return PhFormatString(L"ERROR (%lu)", NodeMetaData.NodeData.EngineType);
+    return PhFormatString(L"ERROR (%lu)", NodeMetaData->NodeData.EngineType);
 }
 
 PVOID EtQueryDeviceProperty(

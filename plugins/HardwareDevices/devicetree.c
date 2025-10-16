@@ -57,6 +57,8 @@ static ULONG DeviceDisabledInterfaceColor = 0;
 static ULONG DeviceArrivedColor = 0;
 static ULONG DeviceHighlightingDuration = 0;
 
+static CONST PH_STRINGREF DevicePageText = PH_STRINGREF_INIT(L"Devices");
+static CONST PH_STRINGREF DeviceBannerText = PH_STRINGREF_INIT(L"Search Devices");
 static PPH_OBJECT_TYPE DeviceTreeType = NULL;
 static BOOLEAN DeviceTabCreated = FALSE;
 static HWND DeviceTreeHandle = NULL;
@@ -1392,6 +1394,7 @@ VOID DevicesTreeInitialize(
     DeviceTreeUpdateVisibleColumns();
 }
 
+_Function_class_(PH_MAIN_TAB_PAGE_CALLBACK)
 BOOLEAN DevicesTabPageCallback(
     _In_ struct _PH_MAIN_TAB_PAGE* Page,
     _In_ PH_MAIN_TAB_PAGE_MESSAGE Message,
@@ -1459,7 +1462,7 @@ BOOLEAN DevicesTabPageCallback(
         return TRUE;
     case MainTabPageSelected:
         {
-            DeviceTabSelected = (BOOLEAN)Parameter1;
+            DeviceTabSelected = (BOOLEAN)PtrToUlong(Parameter1);
             if (DeviceTabSelected)
             {
                 DeviceTreePublishAsync(FALSE);
@@ -1651,6 +1654,7 @@ VOID NTAPI DeviceTreeMenuItemCallback(
     }
 }
 
+_Function_class_(TOOLSTATUS_TAB_ACTIVATE_CONTENT)
 VOID NTAPI ToolStatusActivateContent(
     _In_ BOOLEAN Select
     )
@@ -1673,6 +1677,7 @@ VOID NTAPI ToolStatusActivateContent(
     }
 }
 
+_Function_class_(TOOLSTATUS_GET_TREENEW_HANDLE)
 HWND NTAPI ToolStatusGetTreeNewHandle(
     VOID
     )
@@ -1687,7 +1692,9 @@ VOID NTAPI DeviceProviderCallbackHandler(
     )
 {
     if (DeviceTabCreated && DeviceTabSelected && AutoRefreshDeviceTree)
+    {
         SystemInformer_Invoke(DeviceTreePublish, DeviceTreeCreateIfNecessary(FALSE));
+    }
 }
 
 VOID DeviceTreeRemoveDeviceNode(
@@ -1795,16 +1802,15 @@ VOID InitializeDevicesTab(
     DeviceTreeUpdateCachedSettings(TRUE);
 
     RtlZeroMemory(&page, sizeof(PH_MAIN_TAB_PAGE));
-    PhInitializeStringRef(&page.Name, L"Devices");
+    page.Name = DevicePageText;
     page.Callback = DevicesTabPageCallback;
     DevicesAddedTabPage = PhPluginCreateTabPage(&page);
 
-    if (ToolStatusInterface = PhGetPluginInterfaceZ(TOOLSTATUS_PLUGIN_NAME, TOOLSTATUS_INTERFACE_VERSION))
+    if (ToolStatusInterface = PhGetPluginInterfaceZ(TOOLSTATUS_INTERFACE_NAME, TOOLSTATUS_INTERFACE_VERSION))
     {
         PTOOLSTATUS_TAB_INFO tabInfo;
 
-        tabInfo = ToolStatusInterface->RegisterTabInfo(DevicesAddedTabPage->Index);
-        tabInfo->BannerText = L"Search Devices";
+        tabInfo = ToolStatusInterface->RegisterTabInfo(DevicesAddedTabPage->Index, &DeviceBannerText);
         tabInfo->ActivateContent = ToolStatusActivateContent;
         tabInfo->GetTreeNewHandle = ToolStatusGetTreeNewHandle;
     }

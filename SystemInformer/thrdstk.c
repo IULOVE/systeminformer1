@@ -291,6 +291,7 @@ VOID ThreadStackSaveSettingsTreeList(
     PhDereferenceObject(settings);
 }
 
+_Function_class_(PH_HASHTABLE_EQUAL_FUNCTION)
 BOOLEAN ThreadStackNodeHashtableEqualFunction(
     _In_ PVOID Entry1,
     _In_ PVOID Entry2
@@ -302,6 +303,7 @@ BOOLEAN ThreadStackNodeHashtableEqualFunction(
     return node1->Index == node2->Index;
 }
 
+_Function_class_(PH_HASHTABLE_HASH_FUNCTION)
 ULONG ThreadStackNodeHashtableHashFunction(
     _In_ PVOID Entry
     )
@@ -844,6 +846,7 @@ VOID DeleteThreadStackTree(
     PhDereferenceObject(Context->NodeList);
 }
 
+_Function_class_(PH_TYPE_DELETE_PROCEDURE)
 VOID NTAPI PhpThreadStackContextDeleteProcedure(
     _In_ PVOID Object,
     _In_ ULONG Flags
@@ -1261,6 +1264,12 @@ INT_PTR CALLBACK PhpThreadStackDlgProc(
             }
         }
         break;
+    case WM_DPICHANGED:
+        {
+            PhLayoutManagerUpdate(&context->LayoutManager, LOWORD(wParam));
+            PhLayoutManagerLayout(&context->LayoutManager);
+        }
+        break;
     case WM_SIZE:
         {
             PhLayoutManagerLayout(&context->LayoutManager);
@@ -1480,6 +1489,7 @@ BOOLEAN NTAPI PhpWalkThreadStackCallback(
     return TRUE;
 }
 
+_Function_class_(USER_THREAD_START_ROUTINE)
 NTSTATUS PhpRefreshThreadStackThreadStart(
     _In_ PVOID Parameter
     )
@@ -1673,7 +1683,9 @@ HRESULT CALLBACK PhpThreadStackTaskDialogCallback(
         break;
     case TDN_DESTROYED:
         {
-            PhUnregisterCallback(&PhSymbolEventCallback, &context->SymbolProviderEventRegistration);
+            // TDN_DESTROYED can occur without TDN_DIALOG_CONSTRUCTED
+            if (context->TaskDialogHandle)
+                PhUnregisterCallback(&PhSymbolEventCallback, &context->SymbolProviderEventRegistration);
         }
         break;
     case TDN_BUTTON_CLICKED:

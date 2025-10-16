@@ -169,7 +169,6 @@ typedef struct _PH_PROCESS_ITEM
     PH_INTEGRITY_LEVEL IntegrityLevel;
     PPH_STRINGREF IntegrityString;
     PS_PROTECTION Protection;
-    PPH_STRING ProtectionString;
 
     // Other
 
@@ -424,6 +423,7 @@ VOID PhFlushProcessQueryData(
     VOID
     );
 
+_Function_class_(PH_PROVIDER_FUNCTION)
 VOID PhProcessProviderUpdate(
     _In_ PVOID Object
     );
@@ -543,6 +543,7 @@ PhDuplicateProcessInformation(
 // end_phapppub
 
 PPH_PROCESS_ITEM
+NTAPI
 PhCreateProcessItemFromHandle(
     _In_ HANDLE ProcessId,
     _In_ HANDLE ProcessHandle,
