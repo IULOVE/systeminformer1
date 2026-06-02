@@ -20,10 +20,12 @@ VOID PhAddDefaultSettings(
     VOID
     )
 {
+    PhpAddStringSetting(SETTING_SCHEMA_FILE, L"https://systeminformer.io/settings.schema.json");
     PhpAddIntegerSetting(SETTING_ALLOW_ONLY_ONE_INSTANCE, L"1");
     PhpAddIntegerSetting(SETTING_CLOSE_ON_ESCAPE, L"0");
     PhpAddStringSetting(SETTING_DBGHELP_SEARCH_PATH, L"SRV*C:\\Symbols*https://msdl.microsoft.com/download/symbols");
     PhpAddIntegerSetting(SETTING_DBGHELP_UNDECORATE, L"1");
+    PhpAddIntegerSetting(SETTING_DBGHELP_VERIFY_MICROSOFT_CHAIN, L"1");
     PhpAddStringSetting(SETTING_DISABLED_PLUGINS, L"");
     PhpAddIntegerSetting(SETTING_ELEVATION_LEVEL, L"1"); // PromptElevateAction
     PhpAddIntegerSetting(SETTING_ENABLE_ADVANCED_OPTIONS, L"0");
@@ -50,6 +52,7 @@ VOID PhAddDefaultSettings(
     PhpAddIntegerSetting(SETTING_ENABLE_NETWORK_RESOLVE, L"1");
     PhpAddIntegerSetting(SETTING_ENABLE_NETWORK_RESOLVE_DOH, L"0");
     PhpAddIntegerSetting(SETTING_ENABLE_MEM_STRINGS_TREE_DIALOG, L"0");
+    PhpAddIntegerSetting(SETTING_ENABLE_MEM_STRINGS_BULK_SEARCH, L"1");
     PhpAddIntegerSetting(SETTING_ENABLE_PACKAGE_ICON_SUPPORT, L"0");
     PhpAddIntegerSetting(SETTING_ENABLE_PROCESS_HANDLE_PNP_DEVICE_NAME_SUPPORT, L"0");
     PhpAddIntegerSetting(SETTING_ENABLE_PLUGINS, L"1");
@@ -188,6 +191,10 @@ VOID PhAddDefaultSettings(
     PhpAddStringSetting(SETTING_MODULE_TREE_LIST_SORT, L"0,0"); // 0, NoSortOrder
     PhpAddStringSetting(SETTING_NETWORK_TREE_LIST_COLUMNS, L"");
     PhpAddStringSetting(SETTING_NETWORK_TREE_LIST_SORT, L"0,1"); // 0, AscendingSortOrder
+    PhpAddIntegerSetting(SETTING_USE_COLOR_NETWORK_UNKNOWN_PROCESS, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_NETWORK_UNKNOWN_PROCESS, L"9314ff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_NETWORK_SUBSYSTEM_PROCESS, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_NETWORK_SUBSYSTEM_PROCESS, L"ff8000");
     PhpAddIntegerSetting(SETTING_NON_POLL_FLUSH_INTERVAL, L"A"); // % 10
     PhpAddIntegerSetting(SETTING_NO_PURGE_PROCESS_RECORDS, L"0");
     PhpAddStringSetting(SETTING_OPTIONS_CUSTOM_COLOR_LIST, L"");
@@ -213,6 +220,7 @@ VOID PhAddDefaultSettings(
     PhpAddStringSetting(SETTING_PROGRAM_INSPECT_EXECUTABLES, L"peview.exe \"%s\"");
     PhpAddIntegerSetting(SETTING_PROPAGATE_CPU_USAGE, L"0");
     PhpAddIntegerSetting(SETTING_RELEASE_CHANNEL, L"0"); // PhReleaseChannel
+    PhpAddStringSetting(SETTING_CLIENT_ID, L"");
     PhpAddIntegerSetting(SETTING_RUN_AS_ENABLE_AUTO_COMPLETE, L"0");
     PhpAddStringSetting(SETTING_RUN_AS_PROGRAM, L"");
     PhpAddStringSetting(SETTING_RUN_AS_USER_NAME, L"");
@@ -245,8 +253,10 @@ VOID PhAddDefaultSettings(
     PhpAddIntegerSetting(SETTING_SORT_CHILD_PROCESSES, L"0");
     PhpAddIntegerSetting(SETTING_SORT_ROOT_PROCESSES, L"0");
     PhpAddIntegerSetting(SETTING_START_HIDDEN, L"0");
+    PhpAddIntegerSetting(SETTING_SYSINFO_MINIMUM_GRAPH_HEIGHT, L"96"); // 150
+    PhpAddIntegerSetting(SETTING_SYSINFO_WINDOW_SCROLL_ENABLED, L"0");
     PhpAddIntegerSetting(SETTING_SYSINFO_SHOW_CPU_SPEED_MHZ, L"0");
-    PhpAddIntegerSetting(SETTING_SYSINFO_SHOW_CPU_SPEED_PER_CPU, L"0");
+    PhpAddIntegerSetting(SETTING_SYSINFO_SHOW_CPU_SPEED_PER_CPU, L"1");
     PhpAddIntegerSetting(SETTING_SYSINFO_WINDOW_ALWAYS_ON_TOP, L"0");
     PhpAddIntegerSetting(SETTING_SYSINFO_WINDOW_ONE_GRAPH_PER_CPU, L"0");
     PhpAddIntegerPairSetting(SETTING_SYSINFO_WINDOW_POSITION, L"200,200");
@@ -263,8 +273,9 @@ VOID PhAddDefaultSettings(
     PhpAddIntegerSetting(SETTING_THIN_ROWS, L"0");
     PhpAddStringSetting(SETTING_THREAD_TREE_LIST_COLUMNS, L"");
     PhpAddStringSetting(SETTING_THREAD_TREE_LIST_SORT, L"1,2"); // 1, DescendingSortOrder
-    PhpAddIntegerSetting(SETTING_THREAD_TREE_LIST_FLAGS, L"60");
+    PhpAddIntegerSetting(SETTING_THREAD_TREE_LIST_FLAGS, L"7f8");
     PhpAddStringSetting(SETTING_THREAD_STACK_TREE_LIST_COLUMNS, L"");
+    PhpAddIntegerPairSetting(SETTING_THREAD_STACK_WINDOW_POSITION, L"0,0");
     PhpAddScalableIntegerPairSetting(SETTING_THREAD_STACK_WINDOW_SIZE, L"@96|420,400");
     PhpAddIntegerPairSetting(SETTING_TOKEN_WINDOW_POSITION, L"0,0");
     PhpAddScalableIntegerPairSetting(SETTING_TOKEN_WINDOW_SIZE, L"@96|0,0");
@@ -281,6 +292,7 @@ VOID PhAddDefaultSettings(
     PhpAddIntegerSetting(SETTING_TREE_LIST_ENABLE_HEADER_TOTALS, L"1");
     PhpAddIntegerSetting(SETTING_TREE_LIST_ENABLE_DRAG_REORDER, L"0");
     PhpAddIntegerSetting(SETTING_UPDATE_INTERVAL, L"3e8"); // 1000ms
+    PhpAddIntegerSetting(SETTING_ENABLE_HIGH_RESOLUTION, L"1");
     PhpAddStringSetting(SETTING_USER_LIST_TREE_LIST_COLUMNS, L"");
     PhpAddIntegerPairSetting(SETTING_USER_LIST_WINDOW_POSITION, L"0,0");
     PhpAddScalableIntegerPairSetting(SETTING_USER_LIST_WINDOW_SIZE, L"@96|550,420");
@@ -295,82 +307,144 @@ VOID PhAddDefaultSettings(
     PhpAddScalableIntegerPairSetting(SETTING_ZOMBIE_PROCESSES_WINDOW_SIZE, L"@96|520,400");
 
     // Colors are specified with R in the lowest byte, then G, then B. So: bbggrr.
-    PhpAddIntegerSetting(L"ColorNew", L"00ff7f"); // Chartreuse
-    PhpAddIntegerSetting(L"ColorRemoved", L"283cff");
-    PhpAddIntegerSetting(L"UseColorOwnProcesses", L"1");
-    PhpAddIntegerSetting(L"ColorOwnProcesses", L"aaffff");
-    PhpAddIntegerSetting(L"UseColorSystemProcesses", L"1");
-    PhpAddIntegerSetting(L"ColorSystemProcesses", L"ffccaa");
-    PhpAddIntegerSetting(L"UseColorServiceProcesses", L"1");
-    PhpAddIntegerSetting(L"ColorServiceProcesses", L"ffffcc");
-    PhpAddIntegerSetting(L"UseColorBackgroundProcesses", L"0");
-    PhpAddIntegerSetting(L"ColorBackgroundProcesses", L"bcbc78");
-    PhpAddIntegerSetting(L"UseColorJobProcesses", L"0");
-    PhpAddIntegerSetting(L"ColorJobProcesses", L"3f85cd"); // Peru
-    PhpAddIntegerSetting(L"UseColorWow64Processes", L"0");
-    PhpAddIntegerSetting(L"ColorWow64Processes", L"8f8fbc"); // Rosy Brown
-    PhpAddIntegerSetting(L"UseColorDebuggedProcesses", L"1");
-    PhpAddIntegerSetting(L"ColorDebuggedProcesses", L"ffbbcc");
-    PhpAddIntegerSetting(L"UseColorElevatedProcesses", L"1");
-    PhpAddIntegerSetting(L"ColorElevatedProcesses", L"00aaff");
-    PhpAddIntegerSetting(L"UseColorHandleFiltered", L"1");
-    PhpAddIntegerSetting(L"ColorHandleFiltered", L"000000"); // Black
-    PhpAddIntegerSetting(L"UseColorImmersiveProcesses", L"1");
-    PhpAddIntegerSetting(L"ColorImmersiveProcesses", L"cbc0ff"); // Pink
-    PhpAddIntegerSetting(L"UseColorUIAccessProcesses", L"1");
-    PhpAddIntegerSetting(L"ColorUIAccessProcesses", L"00aaff"); // Orange
-    PhpAddIntegerSetting(L"UseColorPicoProcesses", L"1");
-    PhpAddIntegerSetting(L"ColorPicoProcesses", L"ff8000"); // Blue
-    PhpAddIntegerSetting(L"UseColorSuspended", L"1");
-    PhpAddIntegerSetting(L"ColorSuspended", L"777777");
-    PhpAddIntegerSetting(L"UseColorDotNet", L"1");
-    PhpAddIntegerSetting(L"ColorDotNet", L"00ffde");
-    PhpAddIntegerSetting(L"UseColorPacked", L"1");
-    PhpAddIntegerSetting(L"ColorPacked", L"9314ff"); // Deep Pink
-    PhpAddIntegerSetting(L"UseColorLowImageCoherency", L"1");
-    PhpAddIntegerSetting(L"ColorLowImageCoherency", L"ff14b9"); // Deep Purple
-    PhpAddIntegerSetting(L"UseColorPartiallySuspended", L"0");
-    PhpAddIntegerSetting(L"ColorPartiallySuspended", L"c0c0c0");
-    PhpAddIntegerSetting(L"UseColorGuiThreads", L"1");
-    PhpAddIntegerSetting(L"ColorGuiThreads", L"77ffff");
-    PhpAddIntegerSetting(L"UseColorRelocatedModules", L"1");
-    PhpAddIntegerSetting(L"ColorRelocatedModules", L"80c0ff");
-    PhpAddIntegerSetting(L"UseColorProtectedHandles", L"1");
-    PhpAddIntegerSetting(L"ColorProtectedHandles", L"777777");
-    PhpAddIntegerSetting(L"UseColorProtectedInheritHandles", L"1");
-    PhpAddIntegerSetting(L"ColorProtectedInheritHandles", L"c0c0c0");
-    PhpAddIntegerSetting(L"UseColorProtectedProcess", L"0");
-    PhpAddIntegerSetting(L"ColorProtectedProcess", L"ff8080");
-    PhpAddIntegerSetting(L"UseColorInheritHandles", L"1");
-    PhpAddIntegerSetting(L"ColorInheritHandles", L"ffff77");
-    PhpAddIntegerSetting(L"UseColorEfficiencyMode", L"1");
-    PhpAddIntegerSetting(L"ColorEfficiencyMode", L"80ff00");
-    PhpAddIntegerSetting(L"UseColorServiceDisabled", L"1");
-    PhpAddIntegerSetting(L"ColorServiceDisabled", L"6d6d6d"); // Dark grey
-    PhpAddIntegerSetting(L"UseColorServiceStop", L"1");
-    PhpAddIntegerSetting(L"ColorServiceStop", L"6d6d6d"); // Dark grey
-    PhpAddIntegerSetting(L"UseColorUnknown", L"1");
-    PhpAddIntegerSetting(L"ColorUnknown", L"8080ff"); // Light Red
+    PhpAddIntegerSetting(SETTING_COLOR_NEW, L"00ff7f"); // Chartreuse
+    PhpAddIntegerSetting(SETTING_COLOR_REMOVED, L"283cff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_OWN_PROCESSES, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_OWN_PROCESSES, L"aaffff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_SYSTEM_PROCESSES, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_SYSTEM_PROCESSES, L"ffccaa");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_SERVICE_PROCESSES, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_SERVICE_PROCESSES, L"ffffcc");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_BACKGROUND_PROCESSES, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_BACKGROUND_PROCESSES, L"bcbc78");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_JOB_PROCESSES, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_JOB_PROCESSES, L"3f85cd"); // Peru
+    PhpAddIntegerSetting(SETTING_USE_COLOR_WOW64_PROCESSES, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_WOW64_PROCESSES, L"8f8fbc"); // Rosy Brown
+    PhpAddIntegerSetting(SETTING_USE_COLOR_DEBUGGED_PROCESSES, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_DEBUGGED_PROCESSES, L"ffbbcc");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_ELEVATED_PROCESSES, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_ELEVATED_PROCESSES, L"00aaff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_HANDLE_FILTERED, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_HANDLE_FILTERED, L"000000"); // Black
+    PhpAddIntegerSetting(SETTING_USE_COLOR_IMMERSIVE_PROCESSES, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_IMMERSIVE_PROCESSES, L"cbc0ff"); // Pink
+    PhpAddIntegerSetting(SETTING_USE_COLOR_UI_ACCESS_PROCESSES, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_UI_ACCESS_PROCESSES, L"00aaff"); // Orange
+    PhpAddIntegerSetting(SETTING_USE_COLOR_PICO_PROCESSES, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_PICO_PROCESSES, L"ff8000"); // Blue
+    PhpAddIntegerSetting(SETTING_USE_COLOR_SUSPENDED, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_SUSPENDED, L"777777");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_DOT_NET, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_DOT_NET, L"00ffde");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_PACKED, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_PACKED, L"9314ff"); // Deep Pink
+    PhpAddIntegerSetting(SETTING_USE_COLOR_LOW_IMAGE_COHERENCY, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_LOW_IMAGE_COHERENCY, L"ff14b9"); // Deep Purple
+    PhpAddIntegerSetting(SETTING_USE_COLOR_PARTIALLY_SUSPENDED, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_PARTIALLY_SUSPENDED, L"c0c0c0");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_GUI_THREADS, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_GUI_THREADS, L"77ffff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_THREAD_SUSPENDED, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_THREAD_SUSPENDED, L"777777");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_THREAD_DELAY_EXECUTION, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_THREAD_DELAY_EXECUTION, L"cbc0ff"); // Pink
+    PhpAddIntegerSetting(SETTING_USE_COLOR_THREAD_USER_REQUEST, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_THREAD_USER_REQUEST, L"ffd57f");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_THREAD_ALERT_BY_THREAD_ID, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_THREAD_ALERT_BY_THREAD_ID, L"ffbbcc");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_THREAD_QUEUE, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_THREAD_QUEUE, L"80ff00");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_THREAD_EXECUTIVE, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_THREAD_EXECUTIVE, L"ff7f7f");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_THREAD_GUI_THREADS, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_THREAD_GUI_THREADS, L"77ffff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_TOKEN_ENABLED_DEFAULT, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_TOKEN_ENABLED_DEFAULT, L"e0f0e0");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_TOKEN_ENABLED, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_TOKEN_ENABLED, L"c0f0c0");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_TOKEN_DISABLED_DEFAULT, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_TOKEN_DISABLED_DEFAULT, L"f0c0c0");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_TOKEN_DISABLED, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_TOKEN_DISABLED, L"f0e0e0");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_TOKEN_REMOVED, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_TOKEN_REMOVED, L"c0c0c0");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_TOKEN_DANGEROUS_FLAG, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_TOKEN_DANGEROUS_FLAG, L"c0f0c0");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_TOKEN_NORMAL_FLAG, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_TOKEN_NORMAL_FLAG, L"f0c0c0");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_MODULE_UNKNOWN, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_MODULE_UNKNOWN, L"8080ff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_MODULE_LOW_IMAGE_COHERENCY, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_MODULE_LOW_IMAGE_COHERENCY, L"ff14b9");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_MODULE_DOT_NET, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_MODULE_DOT_NET, L"00ffde");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_MODULE_IMMERSIVE, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_MODULE_IMMERSIVE, L"cbc0ff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_MODULE_RELOCATED, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_MODULE_RELOCATED, L"80c0ff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_MODULE_IMAGEKNOWNDLL, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_MODULE_IMAGEKNOWNDLL, L"ff8080");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_MODULE_SYSTEM, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_MODULE_SYSTEM, L"ffbbcc");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_MODULE_MAPPED, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_MODULE_MAPPED, L"e0f0ff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_ENVIRONMENT_CMD, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_ENVIRONMENT_CMD, L"ffbbcc");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_ENVIRONMENT_PROCESS, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_ENVIRONMENT_PROCESS, L"ffffcc");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_ENVIRONMENT_USER, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_ENVIRONMENT_USER, L"aaffff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_ENVIRONMENT_SYSTEM, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_ENVIRONMENT_SYSTEM, L"ffccaa");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_WMI_DEFAULT_NAMESPACE, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_WMI_DEFAULT_NAMESPACE, L"00aaff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_MEMORY_PRIVATE_PAGES, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_MEMORY_PRIVATE_PAGES, L"e0f0ff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_MEMORY_SYSTEM_PAGES, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_MEMORY_SYSTEM_PAGES, L"ffbbcc");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_MEMORY_CFG_PAGES, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_MEMORY_CFG_PAGES, L"ff8080");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_MEMORY_EXECUTE_PAGES, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_MEMORY_EXECUTE_PAGES, L"9314ff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_RELOCATED_MODULES, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_RELOCATED_MODULES, L"80c0ff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_PROTECTED_HANDLES, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_PROTECTED_HANDLES, L"777777");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_PROTECTED_INHERIT_HANDLES, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_PROTECTED_INHERIT_HANDLES, L"c0c0c0");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_PROTECTED_PROCESS, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_PROTECTED_PROCESS, L"ff8080");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_INHERIT_HANDLES, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_INHERIT_HANDLES, L"ffff77");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_EFFICIENCY_MODE, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_EFFICIENCY_MODE, L"80ff00");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_SERVICE_DISABLED, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_SERVICE_DISABLED, L"6d6d6d"); // Dark grey
+    PhpAddIntegerSetting(SETTING_USE_COLOR_SERVICE_STOP, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_SERVICE_STOP, L"6d6d6d"); // Dark grey
+    PhpAddIntegerSetting(SETTING_USE_COLOR_UNKNOWN, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_UNKNOWN, L"8080ff"); // Light Red
 
-    PhpAddIntegerSetting(L"UseColorSystemThreadStack", L"1");
-    PhpAddIntegerSetting(L"ColorSystemThreadStack", L"ffccaa");
-    PhpAddIntegerSetting(L"UseColorUserThreadStack", L"1");
-    PhpAddIntegerSetting(L"ColorUserThreadStack", L"aaffff");
-    PhpAddIntegerSetting(L"UseColorInlineThreadStack", L"1");
-    PhpAddIntegerSetting(L"ColorInlineThreadStack", L"00ffde");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_SYSTEM_THREAD_STACK, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_SYSTEM_THREAD_STACK, L"ffccaa");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_USER_THREAD_STACK, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_USER_THREAD_STACK, L"aaffff");
+    PhpAddIntegerSetting(SETTING_USE_COLOR_INLINE_THREAD_STACK, L"1");
+    PhpAddIntegerSetting(SETTING_COLOR_INLINE_THREAD_STACK, L"00ffde");
 
-    PhpAddIntegerSetting(L"GraphShowText", L"1");
-    PhpAddIntegerSetting(L"GraphColorMode", L"0");
-    PhpAddIntegerSetting(L"ColorCpuKernel", L"00ff00");
-    PhpAddIntegerSetting(L"ColorCpuUser", L"0000ff");
-    PhpAddIntegerSetting(L"ColorIoReadOther", L"00ffff");
-    PhpAddIntegerSetting(L"ColorIoWrite", L"ff0077");
-    PhpAddIntegerSetting(L"ColorPrivate", L"0077ff");
-    PhpAddIntegerSetting(L"ColorPhysical", L"ff8000"); // Blue
+    PhpAddIntegerSetting(SETTING_GRAPH_SHOW_TEXT, L"1");
+    PhpAddIntegerSetting(SETTING_GRAPH_COLOR_MODE, L"0");
+    PhpAddIntegerSetting(SETTING_COLOR_CPU_KERNEL, L"00ff00");
+    PhpAddIntegerSetting(SETTING_COLOR_CPU_USER, L"0000ff");
+    PhpAddIntegerSetting(SETTING_COLOR_IO_READ_OTHER, L"00ffff");
+    PhpAddIntegerSetting(SETTING_COLOR_IO_WRITE, L"ff0077");
+    PhpAddIntegerSetting(SETTING_COLOR_PRIVATE, L"0077ff");
+    PhpAddIntegerSetting(SETTING_COLOR_PHYSICAL, L"ff8000"); // Blue
 
-    PhpAddIntegerSetting(L"ColorPowerUsage", L"00ff00");
-    PhpAddIntegerSetting(L"ColorTemperature", L"0000ff");
-    PhpAddIntegerSetting(L"ColorFanRpm", L"ff0077");
+    PhpAddIntegerSetting(SETTING_COLOR_POWER_USAGE, L"00ff00");
+    PhpAddIntegerSetting(SETTING_COLOR_TEMPERATURE, L"0000ff");
+    PhpAddIntegerSetting(SETTING_COLOR_FAN_RPM, L"ff0077");
 
     PhpAddIntegerSetting(SETTING_KSI_ENABLE, L"0");
     PhpAddIntegerSetting(SETTING_KSI_ENABLE_WARNINGS, L"1");
@@ -378,6 +452,7 @@ VOID PhAddDefaultSettings(
     PhpAddStringSetting(SETTING_KSI_OBJECT_NAME, L"");
     PhpAddStringSetting(SETTING_KSI_PORT_NAME, L"");
     PhpAddStringSetting(SETTING_KSI_ALTITUDE, L"");
+    PhpAddStringSetting(SETTING_KSI_SYSTEM_PROCESS_NAME, L"");
     PhpAddIntegerSetting(SETTING_KSI_DISABLE_IMAGE_LOAD_PROTECTION, L"0");
     PhpAddIntegerSetting(SETTING_KSI_ENABLE_SPLASH_SCREEN, L"0");
     PhpAddIntegerSetting(SETTING_KSI_ENABLE_LOAD_NATIVE, L"0");
@@ -386,12 +461,25 @@ VOID PhAddDefaultSettings(
     PhpAddIntegerSetting(SETTING_KSI_RANDOMIZED_POOL_TAG, L"0");
     PhpAddIntegerSetting(SETTING_KSI_ENABLE_UNLOAD_PROTECTION, L"1");
     PhpAddIntegerSetting(SETTING_KSI_DYN_DATA_NO_EMBEDDED, L"0");
+    PhpAddIntegerSetting(SETTING_KSI_DISABLE_SYSTEM_PROCESS, L"0");
+    PhpAddIntegerSetting(SETTING_KSI_DISABLE_THREAD_NAMES, L"0");
     PhpAddIntegerSetting(SETTING_KSI_CLIENT_PROCESS_PROTECTION_LEVEL, L"0");
     PhpAddStringSetting(SETTING_KSI_PREVIOUS_TEMPORARY_DRIVER_FILE, L"");
     PhpAddIntegerSetting(SETTING_KSI_ENABLE_FS_FEATURE_OFFLOAD_READ, L"1");  // SUPPORTED_FS_FEATURES_OFFLOAD_READ
     PhpAddIntegerSetting(SETTING_KSI_ENABLE_FS_FEATURE_OFFLOAD_WRITE, L"1"); // SUPPORTED_FS_FEATURES_OFFLOAD_WRITE
     PhpAddIntegerSetting(SETTING_KSI_ENABLE_FS_FEATURE_QUERY_OPEN, L"1");    // SUPPORTED_FS_FEATURES_QUERY_OPEN
     PhpAddIntegerSetting(SETTING_KSI_ENABLE_FS_FEATURE_BYPASS_IO, L"1");     // SUPPORTED_FS_FEATURES_BYPASS_IO
+    PhpAddIntegerSetting(SETTING_KSI_RING_BUFFER_LENGTH, L"10000000"); // bytes
+
+    PhpAddIntegerSetting(SETTING_ENABLE_PROCESS_MONITOR, L"0");
+    PhpAddIntegerSetting(SETTING_PROCESS_MONITOR_LOOKBACK, L"1e");
+    PhpAddIntegerSetting(SETTING_PROCESS_MONITOR_CACHE_LIMIT, L"20000");
+    PhpAddStringSetting(SETTING_PROCESS_MONITOR_TREE_LIST_COLUMNS, L"");
+    PhpAddStringSetting(SETTING_PROCESS_MONITOR_TAB_TREE_LIST_COLUMNS, L"");
+    PhpAddIntegerPairSetting(SETTING_PROCESS_MONITOR_WINDOW_POSITION, L"0,0");
+    PhpAddScalableIntegerPairSetting(SETTING_PROCESS_MONITOR_WINDOW_SIZE, L"@96|900,600");
+    PhpAddIntegerSetting(SETTING_PROCESS_MONITOR_CATEGORY_FILTER, L"2f"); // Process | Thread | File | Registry | Image
+    PhpAddIntegerSetting(SETTING_PROCESS_MONITOR_NODE_LIMIT, L"10000");
 }
 
 VOID PhUpdateCachedSettings(
@@ -446,6 +534,72 @@ VOID PhUpdateCachedSettings(
     PH_GET_INTEGER_CACHED_SETTING(ColorPartiallySuspended);
     PH_GET_INTEGER_CACHED_SETTING(UseColorGuiThreads);
     PH_GET_INTEGER_CACHED_SETTING(ColorGuiThreads);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorThreadSuspended);
+    PH_GET_INTEGER_CACHED_SETTING(ColorThreadSuspended);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorThreadDelayExecution);
+    PH_GET_INTEGER_CACHED_SETTING(ColorThreadDelayExecution);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorThreadUserRequest);
+    PH_GET_INTEGER_CACHED_SETTING(ColorThreadUserRequest);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorThreadAlertByThreadId);
+    PH_GET_INTEGER_CACHED_SETTING(ColorThreadAlertByThreadId);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorThreadQueue);
+    PH_GET_INTEGER_CACHED_SETTING(ColorThreadQueue);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorThreadExecutive);
+    PH_GET_INTEGER_CACHED_SETTING(ColorThreadExecutive);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorThreadGuiThreads);
+    PH_GET_INTEGER_CACHED_SETTING(ColorThreadGuiThreads);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorTokenEnabledDefault);
+    PH_GET_INTEGER_CACHED_SETTING(ColorTokenEnabledDefault);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorTokenEnabled);
+    PH_GET_INTEGER_CACHED_SETTING(ColorTokenEnabled);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorTokenDisabledDefault);
+    PH_GET_INTEGER_CACHED_SETTING(ColorTokenDisabledDefault);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorTokenDisabled);
+    PH_GET_INTEGER_CACHED_SETTING(ColorTokenDisabled);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorTokenRemoved);
+    PH_GET_INTEGER_CACHED_SETTING(ColorTokenRemoved);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorTokenDangerousFlag);
+    PH_GET_INTEGER_CACHED_SETTING(ColorTokenDangerousFlag);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorTokenNormalFlag);
+    PH_GET_INTEGER_CACHED_SETTING(ColorTokenNormalFlag);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorModuleUnknown);
+    PH_GET_INTEGER_CACHED_SETTING(ColorModuleUnknown);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorModuleLowImageCoherency);
+    PH_GET_INTEGER_CACHED_SETTING(ColorModuleLowImageCoherency);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorModuleDotNet);
+    PH_GET_INTEGER_CACHED_SETTING(ColorModuleDotNet);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorModuleImmersive);
+    PH_GET_INTEGER_CACHED_SETTING(ColorModuleImmersive);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorModuleRelocated);
+    PH_GET_INTEGER_CACHED_SETTING(ColorModuleRelocated);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorModuleImageKnownDll);
+    PH_GET_INTEGER_CACHED_SETTING(ColorModuleImageKnownDll);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorModuleSystem);
+    PH_GET_INTEGER_CACHED_SETTING(ColorModuleSystem);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorModuleMapped);
+    PH_GET_INTEGER_CACHED_SETTING(ColorModuleMapped);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorNetworkUnknownProcess);
+    PH_GET_INTEGER_CACHED_SETTING(ColorNetworkUnknownProcess);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorNetworkSubsystemProcess);
+    PH_GET_INTEGER_CACHED_SETTING(ColorNetworkSubsystemProcess);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorEnvironmentCmd);
+    PH_GET_INTEGER_CACHED_SETTING(ColorEnvironmentCmd);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorEnvironmentProcess);
+    PH_GET_INTEGER_CACHED_SETTING(ColorEnvironmentProcess);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorEnvironmentUser);
+    PH_GET_INTEGER_CACHED_SETTING(ColorEnvironmentUser);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorEnvironmentSystem);
+    PH_GET_INTEGER_CACHED_SETTING(ColorEnvironmentSystem);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorWmiDefaultNamespace);
+    PH_GET_INTEGER_CACHED_SETTING(ColorWmiDefaultNamespace);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorMemoryPrivatePages);
+    PH_GET_INTEGER_CACHED_SETTING(ColorMemoryPrivatePages);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorMemorySystemPages);
+    PH_GET_INTEGER_CACHED_SETTING(ColorMemorySystemPages);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorMemoryCfgPages);
+    PH_GET_INTEGER_CACHED_SETTING(ColorMemoryCfgPages);
+    PH_GET_INTEGER_CACHED_SETTING(UseColorMemoryExecutePages);
+    PH_GET_INTEGER_CACHED_SETTING(ColorMemoryExecutePages);
     PH_GET_INTEGER_CACHED_SETTING(UseColorRelocatedModules);
     PH_GET_INTEGER_CACHED_SETTING(ColorRelocatedModules);
     PH_GET_INTEGER_CACHED_SETTING(UseColorProtectedHandles);
@@ -486,4 +640,8 @@ VOID PhUpdateCachedSettings(
     PH_GET_INTEGER_CACHED_SETTING(EnableNetworkResolveDoH);
     PH_GET_INTEGER_CACHED_SETTING(EnableVersionSupport);
     PH_GET_INTEGER_CACHED_SETTING(EnableHandleSnapshot);
+
+    PH_GET_INTEGER_CACHED_SETTING(EnableProcessMonitor);
+    PH_GET_INTEGER_CACHED_SETTING(ProcessMonitorLookback);
+    PH_GET_INTEGER_CACHED_SETTING(ProcessMonitorCacheLimit);
 }

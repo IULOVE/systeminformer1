@@ -69,24 +69,24 @@ BOOLEAN EtpDiskPageCallback(
     {
     case MainTabPageCreateWindow:
         {
-            HWND hwnd;
+            HWND WindowHandle;
             ULONG thinRows;
             ULONG treelistBorder;
             ULONG treelistCustomColors;
             PH_TREENEW_CREATEPARAMS treelistCreateParams = { 0 };
 
-            thinRows = PhGetIntegerSetting(L"ThinRows") ? TN_STYLE_THIN_ROWS : 0;
-            treelistBorder = (PhGetIntegerSetting(L"TreeListBorderEnable") && !!PhGetIntegerSetting(L"TreeListBorderEnable")) ? WS_BORDER : 0;
-            treelistCustomColors =  PhGetIntegerSetting(L"TreeListCustomColorsEnable") ? TN_STYLE_CUSTOM_COLORS : 0;
+            thinRows = PhGetIntegerSetting(SETTING_THIN_ROWS) ? TN_STYLE_THIN_ROWS : 0;
+            treelistBorder = (PhGetIntegerSetting(SETTING_TREE_LIST_BORDER_ENABLE) && !!PhGetIntegerSetting(SETTING_TREE_LIST_BORDER_ENABLE)) ? WS_BORDER : 0;
+            treelistCustomColors =  PhGetIntegerSetting(SETTING_TREE_LIST_CUSTOM_COLORS_ENABLE) ? TN_STYLE_CUSTOM_COLORS : 0;
 
             if (treelistCustomColors)
             {
-                treelistCreateParams.TextColor = PhGetIntegerSetting(L"TreeListCustomColorText");
-                treelistCreateParams.FocusColor = PhGetIntegerSetting(L"TreeListCustomColorFocus");
-                treelistCreateParams.SelectionColor = PhGetIntegerSetting(L"TreeListCustomColorSelection");
+                treelistCreateParams.TextColor = PhGetIntegerSetting(SETTING_TREE_LIST_CUSTOM_COLOR_TEXT);
+                treelistCreateParams.FocusColor = PhGetIntegerSetting(SETTING_TREE_LIST_CUSTOM_COLOR_FOCUS);
+                treelistCreateParams.SelectionColor = PhGetIntegerSetting(SETTING_TREE_LIST_CUSTOM_COLOR_SELECTION);
             }
 
-            hwnd = CreateWindow(
+            WindowHandle = PhCreateWindow(
                 PH_TREENEW_CLASSNAME,
                 NULL,
                 WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | TN_STYLE_ICONS | TN_STYLE_DOUBLE_BUFFERED | thinRows | treelistBorder | treelistCustomColors,
@@ -100,13 +100,13 @@ BOOLEAN EtpDiskPageCallback(
                 &treelistCreateParams
                 );
 
-            if (!hwnd)
+            if (!WindowHandle)
                 return FALSE;
 
-            if (PhGetIntegerSetting(L"EnableThemeSupport"))
+            if (PhGetIntegerSetting(SETTING_ENABLE_THEME_SUPPORT))
             {
-                PhInitializeWindowTheme(hwnd, TRUE); // HACK (dmex)
-                TreeNew_ThemeSupport(hwnd, TRUE);
+                PhInitializeWindowTheme(WindowHandle, TRUE); // HACK (dmex)
+                TreeNew_ThemeSupport(WindowHandle, TRUE);
             }
 
             DiskTreeNewCreated = TRUE;
@@ -119,7 +119,7 @@ BOOLEAN EtpDiskPageCallback(
                 );
             DiskNodeList = PhCreateList(100);
 
-            EtInitializeDiskTreeList(hwnd);
+            EtInitializeDiskTreeList(WindowHandle);
 
             //if (!EtEtwEnabled) // always show status (dmex)
             {
@@ -146,13 +146,13 @@ BOOLEAN EtpDiskPageCallback(
                             );
                     }
 
-                    TreeNew_SetEmptyText(hwnd, &DiskTreeErrorText->sr, 0);
+                    TreeNew_SetEmptyText(WindowHandle, &DiskTreeErrorText->sr, 0);
                 }
                 else
                 {
                     if (!PhGetOwnTokenAttributes().Elevated)
                     {
-                        TreeNew_SetEmptyText(hwnd, &DiskTreeEmptyText, 0);
+                        TreeNew_SetEmptyText(WindowHandle, &DiskTreeEmptyText, 0);
                     }
                 }
             }
@@ -188,7 +188,7 @@ BOOLEAN EtpDiskPageCallback(
 
             if (Parameter1)
             {
-                *(HWND*)Parameter1 = hwnd;
+                *(HWND*)Parameter1 = WindowHandle;
             }
         }
         return TRUE;
@@ -265,9 +265,8 @@ VOID EtInitializeDiskTreeList(
 {
     DiskTreeNewHandle = WindowHandle;
 
-    PhSetControlTheme(DiskTreeNewHandle, !PhGetIntegerSetting(L"EnableThemeSupport") ? L"explorer" : L"DarkMode_Explorer");
+    PhSetControlTheme(WindowHandle, !PhGetIntegerSetting(SETTING_ENABLE_THEME_SUPPORT) ? L"explorer" : L"DarkMode_Explorer");
     TreeNew_SetRedraw(WindowHandle, FALSE);
-    SendMessage(TreeNew_GetTooltips(DiskTreeNewHandle), TTM_SETDELAYTIME, TTDT_AUTOPOP, 0x7fff);
     TreeNew_SetCallback(WindowHandle, EtpDiskTreeNewCallback, NULL);
     TreeNew_SetImageList(WindowHandle, PhGetProcessSmallImageList());
 
@@ -278,8 +277,14 @@ VOID EtInitializeDiskTreeList(
     PhAddTreeNewColumnEx(WindowHandle, ETDSTNC_READRATEAVERAGE, TRUE, L"Read rate average", 70, PH_ALIGN_RIGHT, 3, DT_RIGHT, TRUE);
     PhAddTreeNewColumnEx(WindowHandle, ETDSTNC_WRITERATEAVERAGE, TRUE, L"Write rate average", 70, PH_ALIGN_RIGHT, 4, DT_RIGHT, TRUE);
     PhAddTreeNewColumnEx(WindowHandle, ETDSTNC_TOTALRATEAVERAGE, TRUE, L"Total rate average", 70, PH_ALIGN_RIGHT, 5, DT_RIGHT, TRUE);
-    PhAddTreeNewColumnEx(WindowHandle, ETDSTNC_IOPRIORITY, TRUE, L"I/O priority", 70, PH_ALIGN_LEFT, 6, 0, TRUE);
-    PhAddTreeNewColumnEx(WindowHandle, ETDSTNC_RESPONSETIME, TRUE, L"Response time (ms)", 70, PH_ALIGN_RIGHT, 7, 0, TRUE);
+    PhAddTreeNewColumnEx(WindowHandle, ETDSTNC_READRATE, TRUE, L"Read rate", 70, PH_ALIGN_RIGHT, 6, DT_RIGHT, TRUE);
+    PhAddTreeNewColumnEx(WindowHandle, ETDSTNC_WRITERATE, TRUE, L"Write rate", 70, PH_ALIGN_RIGHT, 7, DT_RIGHT, TRUE);
+    PhAddTreeNewColumnEx(WindowHandle, ETDSTNC_TOTALRATE, TRUE, L"Total rate", 70, PH_ALIGN_RIGHT, 8, DT_RIGHT, TRUE);
+    PhAddTreeNewColumnEx(WindowHandle, ETDSTNC_READBYTES, TRUE, L"Read bytes", 70, PH_ALIGN_RIGHT, 9, DT_RIGHT, TRUE);
+    PhAddTreeNewColumnEx(WindowHandle, ETDSTNC_WRITEBYTES, TRUE, L"Write bytes", 70, PH_ALIGN_RIGHT, 10, DT_RIGHT, TRUE);
+    PhAddTreeNewColumnEx(WindowHandle, ETDSTNC_TOTALBYTES, TRUE, L"Total bytes", 70, PH_ALIGN_RIGHT, 11, DT_RIGHT, TRUE);
+    PhAddTreeNewColumnEx(WindowHandle, ETDSTNC_IOPRIORITY, TRUE, L"I/O priority", 70, PH_ALIGN_LEFT, 12, 0, TRUE);
+    PhAddTreeNewColumnEx(WindowHandle, ETDSTNC_RESPONSETIME, TRUE, L"Response time (ms)", 70, PH_ALIGN_RIGHT, 13, 0, TRUE);
     PhAddTreeNewColumn(WindowHandle, ETDSTNC_ORIGINALNAME, FALSE, L"Original name", 200, PH_ALIGN_LEFT, ULONG_MAX, DT_PATH_ELLIPSIS);
 
     PhInitializeTreeNewFilterSupport(&FilterSupport, WindowHandle, DiskNodeList);
@@ -288,6 +293,16 @@ VOID EtInitializeDiskTreeList(
     {
         PhRegisterCallback(ToolStatusInterface->SearchChangedEvent, EtpSearchChangedHandler, NULL, &SearchChangedRegistration);
         PhAddTreeNewFilter(&FilterSupport, EtpSearchDiskListFilterCallback, NULL);
+    }
+
+    if (PhGetIntegerSetting(SETTING_TREE_LIST_CUSTOM_ROW_SIZE))
+    {
+        ULONG treelistCustomRowSize = PhGetIntegerSetting(SETTING_TREE_LIST_CUSTOM_ROW_SIZE);
+
+        if (treelistCustomRowSize < 15)
+            treelistCustomRowSize = 15;
+
+        TreeNew_SetRowHeight(WindowHandle, treelistCustomRowSize);
     }
 
     TreeNew_SetSort(WindowHandle, ETDSTNC_TOTALRATEAVERAGE, DescendingSortOrder);
@@ -496,6 +511,57 @@ BEGIN_SORT_FUNCTION(TotalRateAverage)
 }
 END_SORT_FUNCTION
 
+BEGIN_SORT_FUNCTION(ReadRate)
+{
+    ULONG64 readRate1;
+    ULONG64 readRate2;
+
+    readRate1 = diskItem1->HistoryCount != 0 ? diskItem1->ReadHistory[diskItem1->HistoryPosition] : 0;
+    readRate2 = diskItem2->HistoryCount != 0 ? diskItem2->ReadHistory[diskItem2->HistoryPosition] : 0;
+    sortResult = uint64cmp(readRate1, readRate2);
+}
+END_SORT_FUNCTION
+
+BEGIN_SORT_FUNCTION(WriteRate)
+{
+    ULONG64 writeRate1;
+    ULONG64 writeRate2;
+
+    writeRate1 = diskItem1->HistoryCount != 0 ? diskItem1->WriteHistory[diskItem1->HistoryPosition] : 0;
+    writeRate2 = diskItem2->HistoryCount != 0 ? diskItem2->WriteHistory[diskItem2->HistoryPosition] : 0;
+    sortResult = uint64cmp(writeRate1, writeRate2);
+}
+END_SORT_FUNCTION
+
+BEGIN_SORT_FUNCTION(TotalRate)
+{
+    ULONG64 totalRate1;
+    ULONG64 totalRate2;
+
+    totalRate1 = diskItem1->HistoryCount != 0 ? diskItem1->ReadHistory[diskItem1->HistoryPosition] + diskItem1->WriteHistory[diskItem1->HistoryPosition] : 0;
+    totalRate2 = diskItem2->HistoryCount != 0 ? diskItem2->ReadHistory[diskItem2->HistoryPosition] + diskItem2->WriteHistory[diskItem2->HistoryPosition] : 0;
+    sortResult = uint64cmp(totalRate1, totalRate2);
+}
+END_SORT_FUNCTION
+
+BEGIN_SORT_FUNCTION(ReadBytes)
+{
+    sortResult = uint64cmp(diskItem1->ReadTotal, diskItem2->ReadTotal);
+}
+END_SORT_FUNCTION
+
+BEGIN_SORT_FUNCTION(WriteBytes)
+{
+    sortResult = uint64cmp(diskItem1->WriteTotal, diskItem2->WriteTotal);
+}
+END_SORT_FUNCTION
+
+BEGIN_SORT_FUNCTION(TotalBytes)
+{
+    sortResult = uint64cmp(diskItem1->ReadTotal + diskItem1->WriteTotal, diskItem2->ReadTotal + diskItem2->WriteTotal);
+}
+END_SORT_FUNCTION
+
 BEGIN_SORT_FUNCTION(IoPriority)
 {
     sortResult = uintcmp(diskItem1->IoPriority, diskItem2->IoPriority);
@@ -532,7 +598,7 @@ BOOLEAN NTAPI EtpDiskTreeNewCallback(
 
             if (!getChildren->Node)
             {
-                static PVOID sortFunctions[] =
+                static CONST _CoreCrtNonSecureSearchSortCompareFunction sortFunctions[] =
                 {
                     SORT_FUNCTION(Process),
                     SORT_FUNCTION(Pid),
@@ -543,8 +609,14 @@ BOOLEAN NTAPI EtpDiskTreeNewCallback(
                     SORT_FUNCTION(IoPriority),
                     SORT_FUNCTION(ResponseTime),
                     SORT_FUNCTION(OriginalFile),
+                    SORT_FUNCTION(ReadRate),
+                    SORT_FUNCTION(WriteRate),
+                    SORT_FUNCTION(TotalRate),
+                    SORT_FUNCTION(ReadBytes),
+                    SORT_FUNCTION(WriteBytes),
+                    SORT_FUNCTION(TotalBytes),
                 };
-                int (__cdecl *sortFunction)(const void *, const void *);
+                _CoreCrtNonSecureSearchSortCompareFunction sortFunction;
 
                 static_assert(RTL_NUMBER_OF(sortFunctions) == ETDSTNC_MAXIMUM, "SortFunctions must equal maximum.");
 
@@ -593,6 +665,9 @@ BOOLEAN NTAPI EtpDiskTreeNewCallback(
                 {
                     ULONG64 number;
 
+                    if (EtUpdateInterval == 0)
+                        break;
+
                     number = diskItem->ReadAverage;
                     number *= 1000;
                     number /= EtUpdateInterval;
@@ -616,6 +691,9 @@ BOOLEAN NTAPI EtpDiskTreeNewCallback(
             case ETDSTNC_WRITERATEAVERAGE:
                 {
                     ULONG64 number;
+
+                    if (EtUpdateInterval == 0)
+                        break;
 
                     number = diskItem->WriteAverage;
                     number *= 1000;
@@ -641,6 +719,9 @@ BOOLEAN NTAPI EtpDiskTreeNewCallback(
                 {
                     ULONG64 number;
 
+                    if (EtUpdateInterval == 0)
+                        break;
+
                     number = diskItem->ReadAverage + diskItem->WriteAverage;
                     number *= 1000;
                     number /= EtUpdateInterval;
@@ -656,6 +737,150 @@ BOOLEAN NTAPI EtpDiskTreeNewCallback(
                         if (PhFormatToBuffer(format, RTL_NUMBER_OF(format), node->TotalRateAverageText, sizeof(node->TotalRateAverageText), &returnLength))
                         {
                             getCellText->Text.Buffer = node->TotalRateAverageText;
+                            getCellText->Text.Length = returnLength - sizeof(UNICODE_NULL);
+                        }
+                    }
+                }
+                break;
+            case ETDSTNC_READRATE:
+                {
+                    ULONG64 number;
+
+                    if (EtUpdateInterval == 0)
+                        break;
+
+                    number = diskItem->HistoryCount != 0 ? diskItem->ReadHistory[diskItem->HistoryPosition] : 0;
+                    number *= 1000;
+                    number /= EtUpdateInterval;
+
+                    if (number != 0)
+                    {
+                        SIZE_T returnLength;
+                        PH_FORMAT format[2];
+
+                        PhInitFormatSize(&format[0], number);
+                        PhInitFormatS(&format[1], L"/s");
+
+                        if (PhFormatToBuffer(format, RTL_NUMBER_OF(format), node->ReadRateText, sizeof(node->ReadRateText), &returnLength))
+                        {
+                            getCellText->Text.Buffer = node->ReadRateText;
+                            getCellText->Text.Length = returnLength - sizeof(UNICODE_NULL);
+                        }
+                    }
+                }
+                break;
+            case ETDSTNC_WRITERATE:
+                {
+                    ULONG64 number;
+
+                    if (EtUpdateInterval == 0)
+                        break;
+
+                    number = diskItem->HistoryCount != 0 ? diskItem->WriteHistory[diskItem->HistoryPosition] : 0;
+                    number *= 1000;
+                    number /= EtUpdateInterval;
+
+                    if (number != 0)
+                    {
+                        SIZE_T returnLength;
+                        PH_FORMAT format[2];
+
+                        PhInitFormatSize(&format[0], number);
+                        PhInitFormatS(&format[1], L"/s");
+
+                        if (PhFormatToBuffer(format, RTL_NUMBER_OF(format), node->WriteRateText, sizeof(node->WriteRateText), &returnLength))
+                        {
+                            getCellText->Text.Buffer = node->WriteRateText;
+                            getCellText->Text.Length = returnLength - sizeof(UNICODE_NULL);
+                        }
+                    }
+                }
+                break;
+            case ETDSTNC_TOTALRATE:
+                {
+                    ULONG64 number;
+
+                    if (EtUpdateInterval == 0)
+                        break;
+
+                    number = diskItem->HistoryCount != 0 ? diskItem->ReadHistory[diskItem->HistoryPosition] + diskItem->WriteHistory[diskItem->HistoryPosition] : 0;
+                    number *= 1000;
+                    number /= EtUpdateInterval;
+
+                    if (number != 0)
+                    {
+                        SIZE_T returnLength;
+                        PH_FORMAT format[2];
+
+                        PhInitFormatSize(&format[0], number);
+                        PhInitFormatS(&format[1], L"/s");
+
+                        if (PhFormatToBuffer(format, RTL_NUMBER_OF(format), node->TotalRateText, sizeof(node->TotalRateText), &returnLength))
+                        {
+                            getCellText->Text.Buffer = node->TotalRateText;
+                            getCellText->Text.Length = returnLength - sizeof(UNICODE_NULL);
+                        }
+                    }
+                }
+                break;
+            case ETDSTNC_READBYTES:
+                {
+                    ULONG64 number;
+
+                    number = diskItem->ReadTotal;
+
+                    if (number != 0)
+                    {
+                        SIZE_T returnLength;
+                        PH_FORMAT format;
+
+                        PhInitFormatSize(&format, number);
+
+                        if (PhFormatToBuffer(&format, 1, node->ReadBytesText, sizeof(node->ReadBytesText), &returnLength))
+                        {
+                            getCellText->Text.Buffer = node->ReadBytesText;
+                            getCellText->Text.Length = returnLength - sizeof(UNICODE_NULL);
+                        }
+                    }
+                }
+                break;
+            case ETDSTNC_WRITEBYTES:
+                {
+                    ULONG64 number;
+
+                    number = diskItem->WriteTotal;
+
+                    if (number != 0)
+                    {
+                        SIZE_T returnLength;
+                        PH_FORMAT format;
+
+                        PhInitFormatSize(&format, number);
+
+                        if (PhFormatToBuffer(&format, 1, node->WriteBytesText, sizeof(node->WriteBytesText), &returnLength))
+                        {
+                            getCellText->Text.Buffer = node->WriteBytesText;
+                            getCellText->Text.Length = returnLength - sizeof(UNICODE_NULL);
+                        }
+                    }
+                }
+                break;
+            case ETDSTNC_TOTALBYTES:
+                {
+                    ULONG64 number;
+
+                    number = diskItem->ReadTotal + diskItem->WriteTotal;
+
+                    if (number != 0)
+                    {
+                        SIZE_T returnLength;
+                        PH_FORMAT format;
+
+                        PhInitFormatSize(&format, number);
+
+                        if (PhFormatToBuffer(&format, 1, node->TotalBytesText, sizeof(node->TotalBytesText), &returnLength))
+                        {
+                            getCellText->Text.Buffer = node->TotalBytesText;
                             getCellText->Text.Length = returnLength - sizeof(UNICODE_NULL);
                         }
                     }
@@ -1063,7 +1288,7 @@ VOID EtHandleDiskCommand(
                 {
                     PhShellExecuteUserString(
                         WindowHandle,
-                        L"ProgramInspectExecutables",
+                        SETTING_PROGRAM_INSPECT_EXECUTABLES,
                         fileName->Buffer,
                         FALSE,
                         L"Make sure the PE Viewer executable file is present."
@@ -1340,27 +1565,27 @@ HWND NTAPI EtpToolStatusGetTreeNewHandle(
 }
 
 //INT_PTR CALLBACK EtpDiskTabErrorDialogProc(
-//    _In_ HWND hwndDlg,
-//    _In_ UINT uMsg,
+//    _In_ HWND WindowHandle,
+//    _In_ UINT WindowMessage,
 //    _In_ WPARAM wParam,
 //    _In_ LPARAM lParam
 //    )
 //{
-//    switch (uMsg)
+//    switch (WindowMessage)
 //    {
 //    case WM_INITDIALOG:
 //        {
 //            if (!PhGetOwnTokenAttributes().Elevated)
 //            {
-//                Button_SetElevationRequiredState(GetDlgItem(hwndDlg, IDC_RESTART), TRUE);
+//                Button_SetElevationRequiredState(GetDlgItem(WindowHandle, IDC_RESTART), TRUE);
 //            }
 //            else
 //            {
-//                PhSetDialogItemText(hwndDlg, IDC_ERROR, L"Unable to start the kernel event tracing session.");
-//                ShowWindow(GetDlgItem(hwndDlg, IDC_RESTART), SW_HIDE);
+//                PhSetDialogItemText(WindowHandle, IDC_ERROR, L"Unable to start the kernel event tracing session.");
+//                ShowWindow(GetDlgItem(WindowHandle, IDC_RESTART), SW_HIDE);
 //            }
 //
-//            PhInitializeWindowTheme(hwndDlg, !!PhGetIntegerSetting(L"EnableThemeSupport"));
+//            PhInitializeWindowTheme(WindowHandle, !!PhGetIntegerSetting(SETTING_ENABLE_THEME_SUPPORT));
 //        }
 //        break;
 //    case WM_COMMAND:

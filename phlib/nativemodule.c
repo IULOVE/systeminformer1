@@ -11,6 +11,7 @@
  */
 
 #include <ph.h>
+#include <secwmi.h>
 #include <apiimport.h>
 
 typedef _Function_class_(PH_ENUM_MODULES_CALLBACK)
@@ -25,14 +26,64 @@ BOOLEAN NTAPI PH_ENUM_MODULES_CALLBACK(
 typedef PH_ENUM_MODULES_CALLBACK* PPH_ENUM_MODULES_CALLBACK;
 
 /**
+ * Opens a named section object and a handle to the section object.
+ *
+ * \param[out] SectionHandle Receives the opened section handle on success; NULL on failure.
+ * \param[in] DesiredAccess Access mask specifying desired rights.
+ * \param[in] RootDirectory Optional root directory handle for relative section name resolution; NULL for absolute names.
+ * \param[in] SectionName Pointer to the section name. If the name is too long, STATUS_NAME_TOO_LONG is returned.
+ * \return NTSTATUS Successful or errant status.
+ */
+NTSTATUS PhOpenSection(
+    _Out_ PHANDLE SectionHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ HANDLE RootDirectory,
+    _In_ PCPH_STRINGREF SectionName
+    )
+{
+    NTSTATUS status;
+    UNICODE_STRING objectName;
+    OBJECT_ATTRIBUTES objectAttributes;
+    HANDLE sectionHandle;
+
+    if (!PhStringRefToUnicodeString(SectionName, &objectName))
+        return STATUS_NAME_TOO_LONG;
+
+    InitializeObjectAttributes(
+        &objectAttributes,
+        &objectName,
+        OBJ_CASE_INSENSITIVE,
+        RootDirectory,
+        NULL
+        );
+
+    status = NtOpenSection(
+        &sectionHandle,
+        DesiredAccess,
+        &objectAttributes
+        );
+
+    if (NT_SUCCESS(status))
+    {
+        *SectionHandle = sectionHandle;
+    }
+    else
+    {
+        *SectionHandle = NULL;
+    }
+
+    return status;
+}
+
+/**
  * Creates a section object.
  *
- * \param SectionHandle Pointer to a variable that receives a handle to the section object.
- * \param DesiredAccess The access mask that specifies the requested access to the section object.
- * \param MaximumSize The maximum size, in bytes, of the section. The actual size when backed by the paging file, or the maximum the file can be extended or mapped when backed by an ordinary file.
- * \param SectionPageProtection Specifies the protection to place on each page in the section.
- * \param AllocationAttributes A bitmask of SEC_XXX flags that determines the allocation attributes of the section.
- * \param FileHandle Optionally specifies a handle for an open file object. If the value of FileHandle is NULL, the section is backed by the paging file. Otherwise, the section is backed by the specified file.
+ * \param[out] SectionHandle Pointer to a variable that receives a handle to the section object.
+ * \param[in] DesiredAccess The access mask that specifies the requested access to the section object.
+ * \param[in] MaximumSize The maximum size, in bytes, of the section. The actual size when backed by the paging file, or the maximum the file can be extended or mapped when backed by an ordinary file.
+ * \param[in] SectionPageProtection Specifies the protection to place on each page in the section.
+ * \param[in] AllocationAttributes A bitmask of SEC_XXX flags that determines the allocation attributes of the section.
+ * \param[in] FileHandle Optionally specifies a handle for an open file object. If the value of FileHandle is NULL, the section is backed by the paging file. Otherwise, the section is backed by the specified file.
  * \return NTSTATUS Successful or errant status.
  */
 NTSTATUS PhCreateSection(
@@ -107,6 +158,20 @@ NTSTATUS PhCreateSection(
     return status;
 }
 
+/**
+ * Maps a view of a section into the address space of a process.
+ *
+ * \param[in] SectionHandle Handle to the section object.
+ * \param[in] ProcessHandle Handle to the process to map into.
+ * \param[in,out] BaseAddress On input, preferred base address; on output, actual base address.
+ * \param[in] CommitSize Size of the initially committed pages in the view.
+ * \param[in] SectionOffset Optional offset in the section to begin mapping.
+ * \param[in,out] ViewSize On input, requested view size; on output, actual mapped size.
+ * \param[in] InheritDisposition Specifies whether the view is shared or unshared.
+ * \param[in] AllocationType Type of allocation (usually 0).
+ * \param[in] PageProtection Protection for the mapped pages.
+ * \return NTSTATUS Successful or errant status.
+ */
 NTSTATUS PhMapViewOfSection(
     _In_ HANDLE SectionHandle,
     _In_ HANDLE ProcessHandle,
@@ -179,6 +244,15 @@ NTSTATUS PhMapViewOfSection(
     return status;
 }
 
+/**
+ * Unmaps a view of a section from the address space of a process.
+ *
+ * \param ProcessHandle Handle to the process from which the section view will be unmapped.
+ * \param BaseAddress Optional base address of the mapped view to unmap. If NULL, the system determines the base address.
+ * \return NTSTATUS code indicating success or failure of the operation.
+ *
+ * This function calls NtUnmapViewOfSection to remove a mapped section from the specified process's address space.
+ */
 NTSTATUS PhUnmapViewOfSection(
     _In_ HANDLE ProcessHandle,
     _In_opt_ PVOID BaseAddress
@@ -233,7 +307,10 @@ NTSTATUS PhEnumKernelModules(
     }
 
     if (!NT_SUCCESS(status))
+    {
+        PhFree(buffer);
         return status;
+    }
 
     // Note: Windows 11 24H2 introduced breaking changes where, without SeDebugPrivilege, every module's reported base address is zero.
     // System Informer previously keyed modules by base address in a hash table; this causes enumeration collisions and prevents modules
@@ -302,7 +379,10 @@ NTSTATUS PhEnumKernelModulesEx(
     }
 
     if (!NT_SUCCESS(status))
+    {
+        PhFree(buffer);
         return status;
+    }
 
     // Note: Windows 11 24H2 introduced breaking changes where, without SeDebugPrivilege, every module's reported base address is zero.
     // System Informer previously keyed modules by base address in a hash table; this causes enumeration collisions and prevents modules
@@ -361,26 +441,6 @@ PPH_STRING PhGetKernelFileName(
         return NULL;
 
     return PhZeroExtendToUtf16((PCSTR)modules->Modules[0].FullPathName);
-}
-
-/**
- * Gets the file name of the kernel image without the SystemModuleInformation and string conversion overhead.
- *
- * \return A pointer to a string containing the kernel image file name. You must free the string
- * using PhDereferenceObject() when you no longer need it.
- */
-PPH_STRING PhGetKernelFileName2(
-    VOID
-    )
-{
-    if (WindowsVersion >= WINDOWS_10)
-    {
-        static CONST PH_STRINGREF kernelFileName = PH_STRINGREF_INIT(L"\\SystemRoot\\System32\\ntoskrnl.exe");
-
-        return PhCreateString2(&kernelFileName);
-    }
-
-    return PhGetKernelFileName();
 }
 
 /**
@@ -445,16 +505,23 @@ PPH_STRING PhGetSecureKernelFileName(
 {
     static CONST PH_STRINGREF system32String = PH_STRINGREF_INIT(L"\\System32\\");
     static CONST PH_STRINGREF secureKernelPathPart = PH_STRINGREF_INIT(L"\\securekernel.exe");
+    static CONST PH_STRINGREF secureKernella57PathPart = PH_STRINGREF_INIT(L"\\securekernella57.exe");
     PPH_STRING fileName = NULL;
     PPH_STRING kernelFileName;
+    BOOLEAN isLa57 = FALSE;
 
     if (kernelFileName = PhGetKernelFileName())
     {
         PH_STRINGREF baseName;
 
+        if (PhEndsWithStringRef2(&kernelFileName->sr, L"la57.exe", TRUE))
+        {
+            isLa57 = TRUE;
+        }
+
         if (PhGetBasePath(&kernelFileName->sr, &baseName, NULL))
         {
-            fileName = PhConcatStringRef2(&baseName, &secureKernelPathPart);
+            fileName = PhConcatStringRef2(&baseName, isLa57 ? &PhSecureKernelFileAliasList[1] : &secureKernelPathPart);
         }
 
         PhDereferenceObject(kernelFileName);
@@ -469,7 +536,7 @@ PPH_STRING PhGetSecureKernelFileName(
         fileName = PhConcatStringRef3(
             &systemRootString,
             &system32String,
-            &secureKernelPathPart
+            isLa57 ? &secureKernella57PathPart : &secureKernelPathPart
             );
     }
 

@@ -13,8 +13,10 @@
 #define _SETUP_H
 
 #include <ph.h>
+#include <base64.h>
 #include <guisup.h>
 #include <prsht.h>
+#include <settings.h>
 #include <svcsup.h>
 #include <json.h>
 #include <mapldr.h>
@@ -70,13 +72,14 @@ typedef struct _PH_SETUP_CONTEXT
         ULONG Flags;
         struct
         {
-            ULONG SetupRemoveAppData: 1;
+            ULONG SetupRemoveAppData : 1;
             ULONG SetupIsLegacyUpdate : 1;
             ULONG Silent : 1;
             ULONG NoStart : 1;
             ULONG Hide : 1;
             ULONG NeedsReboot : 1;
-            ULONG Spare : 26;
+            ULONG SetupProgressActive : 1;
+            ULONG Spare : 25;
         };
     };
 
@@ -91,9 +94,23 @@ typedef struct _PH_SETUP_CONTEXT
     ULONG CurrentRevisionVersion;
 
     HANDLE SubProcessHandle;
+
+    PPH_STRING SessionId;
 } PH_SETUP_CONTEXT, *PPH_SETUP_CONTEXT;
 
 VOID SetupParseCommandLine(
+    _In_ PPH_SETUP_CONTEXT Context
+    );
+
+VOID SetupApplyDarkModeToPage(
+    _In_ HWND WindowHandle
+    );
+
+LRESULT SetupHandleControlCustomDraw(
+    _In_ PVOID CustomDraw
+    );
+
+VOID SetupShowWizard(
     _In_ PPH_SETUP_CONTEXT Context
     );
 
@@ -185,6 +202,19 @@ VOID SetupCreateWindowsOptions(
 VOID SetupDeleteWindowsOptions(
     _In_ PPH_SETUP_CONTEXT Context
     );
+BOOLEAN SetupHasTaskMgrDebuggerIfeo(
+    VOID
+    );
+NTSTATUS SetupCreateTaskMgrDebuggerIfeo(
+    _In_ PPH_SETUP_CONTEXT Context
+    );
+
+NTSTATUS SetupCreateLocalDumpsKey(
+    VOID
+    );
+VOID SetupDeleteLocalDumpsKey(
+    VOID
+    );
 
 VOID SetupCreateShortcuts(
     _In_ PPH_SETUP_CONTEXT Context
@@ -204,9 +234,10 @@ NTSTATUS SetupExecuteApplication(
     _In_ PPH_SETUP_CONTEXT Context
     );
 
-VOID SetupUpgradeSettingsFile(
+NTSTATUS SetupUpgradeSettingsFile(
     VOID
     );
+
 NTSTATUS SetupConvertSettingsFile(
     VOID
     );
@@ -222,7 +253,7 @@ typedef struct _SETUP_REMOVE_FILE
     PWSTR FileName;
 } SETUP_REMOVE_FILE, *PSETUP_REMOVE_FILE;
 
-VOID SetupCreateLink(
+HRESULT SetupCreateLink(
     _In_ PCWSTR LinkFilePath,
     _In_ PCWSTR FilePath,
     _In_ PCWSTR FileParentDir,
@@ -241,7 +272,7 @@ PPH_STRING GetApplicationInstallPath(
     VOID
     );
 
-BOOLEAN SetupLegacySetupInstalled(
+NTSTATUS SetupLegacySetupInstalled(
     VOID
     );
 
@@ -263,6 +294,28 @@ NTSTATUS SetupOverwriteFile(
     _In_ PPH_STRING FileName,
     _In_ PVOID Buffer,
     _In_ ULONG BufferLength
+    );
+
+NTSTATUS SetupWriteFileAtomic(
+    _In_ PPH_SETUP_CONTEXT Context,
+    _In_ PPH_STRING FinalName,
+    _In_ PVOID Buffer,
+    _In_ ULONG BufferLength
+    );
+
+NTSTATUS SetupCommitFile(
+    _In_ PPH_SETUP_CONTEXT Context,
+    _In_ PPH_STRING FinalName
+    );
+
+NTSTATUS SetupRollbackFile(
+    _In_ PPH_SETUP_CONTEXT Context,
+    _In_ PPH_STRING FinalName
+    );
+
+NTSTATUS SetupFinalizeFile(
+    _In_ PPH_SETUP_CONTEXT Context,
+    _In_ PPH_STRING FinalName
     );
 
 NTSTATUS SetupHashFile(
@@ -292,24 +345,44 @@ BOOLEAN UpdateDownloadUpdateData(
 
 // extract.c
 
+VOID SetupSetProgressMarquee(
+    _In_ PPH_SETUP_CONTEXT Context,
+    _In_ BOOLEAN Enable
+    );
+
+VOID SetupSetProgressText(
+    _In_ PPH_SETUP_CONTEXT Context,
+    _In_opt_ PCWSTR MainInstruction,
+    _In_opt_ PCWSTR Content
+    );
+
+VOID SetupSetProgressValue(
+    _In_ PPH_SETUP_CONTEXT Context,
+    _In_ ULONG Value
+    );
+
+_Function_class_(USER_THREAD_START_ROUTINE)
 NTSTATUS CALLBACK SetupExtractBuild(
     _In_ PPH_SETUP_CONTEXT Context
     );
 
 // install.c
 
+_Function_class_(USER_THREAD_START_ROUTINE)
 NTSTATUS CALLBACK SetupProgressThread(
-    _In_ PPH_SETUP_CONTEXT Context
+    _In_ PVOID Context
     );
 
 // update.c
 
+_Function_class_(USER_THREAD_START_ROUTINE)
 NTSTATUS CALLBACK SetupUpdateBuild(
-    _In_ PPH_SETUP_CONTEXT Context
+    _In_ PVOID Context
     );
 
 // uninstall.c
 
+_Function_class_(USER_THREAD_START_ROUTINE)
 NTSTATUS CALLBACK SetupUninstallBuild(
     _In_ PPH_SETUP_CONTEXT Context
     );

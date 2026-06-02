@@ -90,6 +90,12 @@ static HBITMAP GraphOldBitmap = NULL;
 static HBITMAP GraphBitmap = NULL;
 static PVOID GraphBits = NULL;
 
+/**
+ * Initializes the process tree list.
+ *
+ * This function sets up any necessary data structures or state required
+ * for displaying or managing the process tree within the application.
+ */
 VOID PhProcessTreeListInitialization(
     VOID
     )
@@ -722,7 +728,10 @@ VOID PhTickProcessNodes(
 
     // Header text invalidation (dmex)
 
-    memset(PhProcessTreeColumnHeaderCache, 0, PhProcessTreeColumnHeaderCacheLength);
+    if (PhProcessTreeColumnHeaderCache)
+    {
+        memset(PhProcessTreeColumnHeaderCache, 0, PhProcessTreeColumnHeaderCacheLength);
+    }
 
     // Node text invalidation, node updates
 
@@ -820,7 +829,11 @@ static VOID PhpNeedGraphContext(
         return;
     GraphBitmap = PhCreateDIBSection(hdc, PHBF_DIB, Width, Height, &GraphBits);
     if (!GraphBitmap)
+    {
+        DeleteDC(GraphContext);
+        GraphContext = NULL;
         return;
+    }
     GraphOldBitmap = SelectBitmap(GraphContext, GraphBitmap);
 }
 
@@ -874,6 +887,8 @@ FORCEINLINE VOID PhpAccumulateField(
     case AggregateTypeIntPtr:
         *(PULONG_PTR)Accumulator += *(PULONG_PTR)Value;
         break;
+    default:
+        ASSUME_NO_DEFAULT;
     }
 }
 
@@ -2585,7 +2600,7 @@ BEGIN_SORT_FUNCTION(MinimumWorkingSet)
     PhpUpdateProcessNodeQuotaLimits(node2);
 
     PhpAggregateFieldIfNeeded(node1, AggregateTypeIntPtr, AggregateProcessNode, node1, FIELD_OFFSET(PH_PROCESS_NODE, MinimumWorkingSetSize), &number1);
-    PhpAggregateFieldIfNeeded(node1, AggregateTypeIntPtr, AggregateProcessNode, node1, FIELD_OFFSET(PH_PROCESS_NODE, MinimumWorkingSetSize), &number1);
+    PhpAggregateFieldIfNeeded(node2, AggregateTypeIntPtr, AggregateProcessNode, node2, FIELD_OFFSET(PH_PROCESS_NODE, MinimumWorkingSetSize), &number2);
 
     sortResult = uintptrcmp(number1, number2);
 }
@@ -2600,7 +2615,7 @@ BEGIN_SORT_FUNCTION(MaximumWorkingSet)
     PhpUpdateProcessNodeQuotaLimits(node2);
 
     PhpAggregateFieldIfNeeded(node1, AggregateTypeIntPtr, AggregateProcessNode, node1, FIELD_OFFSET(PH_PROCESS_NODE, MaximumWorkingSetSize), &number1);
-    PhpAggregateFieldIfNeeded(node1, AggregateTypeIntPtr, AggregateProcessNode, node1, FIELD_OFFSET(PH_PROCESS_NODE, MaximumWorkingSetSize), &number1);
+    PhpAggregateFieldIfNeeded(node2, AggregateTypeIntPtr, AggregateProcessNode, node2, FIELD_OFFSET(PH_PROCESS_NODE, MaximumWorkingSetSize), &number2);
 
     sortResult = uintptrcmp(number1, number2);
 }
@@ -3039,7 +3054,7 @@ BOOLEAN NTAPI PhpProcessTreeNewCallback(
 
             if (sortList)
             {
-                static PVOID sortFunctions[] =
+                static CONST _CoreCrtNonSecureSearchSortCompareFunction sortFunctions[] =
                 {
                     SORT_FUNCTION(Name),
                     SORT_FUNCTION(Pid),
@@ -3149,7 +3164,7 @@ BOOLEAN NTAPI PhpProcessTreeNewCallback(
                     SORT_FUNCTION(MitigationPolicies),
                     SORT_FUNCTION(Services),
                 };
-                int (__cdecl *sortFunction)(const void *, const void *);
+                _CoreCrtNonSecureSearchSortCompareFunction sortFunction;
 
                 static_assert(RTL_NUMBER_OF(sortFunctions) == PHPRTLC_MAXIMUM, "SortFunctions must equal maximum.");
 
@@ -5672,6 +5687,7 @@ BOOLEAN NTAPI PhpProcessTreeNewCallback(
             PPH_PROCESS_NODE targetNode = (PPH_PROCESS_NODE)reorderEvent->Target;
             BOOLEAN targetIsDescendant = FALSE;
             ULONG oldIndex, newIndex;
+            PPH_PROCESS_NODE originalParent;
 
             if (sourceNode && targetNode)
             {
@@ -5686,6 +5702,9 @@ BOOLEAN NTAPI PhpProcessTreeNewCallback(
                     current = current->Parent;
                 }
             }
+
+            // Save original parent before unlinking, so we can restore on invalid move.
+            originalParent = sourceNode->Parent;
 
             // Remove sourceNode from its current parent or root list (dmex)
             if (sourceNode->Parent)
@@ -5752,9 +5771,18 @@ BOOLEAN NTAPI PhpProcessTreeNewCallback(
             }
             else
             {
-                // Invalid move (would create a cycle) – restore original placement at end of root list. (dmex)
-                PhInsertItemList(ProcessNodeRootList, ProcessNodeRootList->Count, sourceNode);
-                sourceNode->Parent = NULL;
+                // Invalid move (would create a cycle) - restore to original position. (dmex)
+                if (originalParent)
+                {
+                    ULONG restoreIndex = (oldIndex != ULONG_MAX) ? oldIndex : originalParent->Children->Count;
+                    PhInsertItemList(originalParent->Children, restoreIndex, sourceNode);
+                }
+                else
+                {
+                    ULONG restoreIndex = (oldIndex != ULONG_MAX) ? oldIndex : ProcessNodeRootList->Count;
+                    PhInsertItemList(ProcessNodeRootList, restoreIndex, sourceNode);
+                }
+                sourceNode->Parent = originalParent;
             }
 
             TreeNew_NodesStructured(hwnd);
@@ -5919,13 +5947,11 @@ static VOID PhpAddAndPropagateProcessItems(
     _In_ PPH_PROCESS_NODE ProcessNode
     )
 {
-    for (ULONG i = 0; i < ProcessNode->Children->Count; i++)
+    if (ProcessNode->Children)
     {
-        PPH_PROCESS_NODE child = ProcessNode->Children->Items[i];
-
-        if (child->Children)
+        for (ULONG i = 0; i < ProcessNode->Children->Count; i++)
         {
-            PhpAddAndPropagateProcessItems(ProcessesArray, child);
+            PhpAddAndPropagateProcessItems(ProcessesArray, ProcessNode->Children->Items[i]);
         }
     }
 
@@ -6259,14 +6285,13 @@ PPH_LIST PhDuplicateProcessNodeList(
 }
 
 /**
-* Determines if the process item should show the image coherency in the UI.
-*
-* \param[in] ProcessItem - Process item to check.
-* \param[in] CheckThreshold - If TRUE the image low coherency threshold is
-* checked, see: LowImageCoherencyThreshold.
-*
-* \return TRUE if the image coherency should be shown, FALSE otherwise.
-*/
+ * Determines if the process item should show the image coherency in the UI.
+ *
+ * \param[in] ProcessItem - Process item to check.
+ * \param[in] CheckThreshold - If TRUE the image low coherency threshold is
+ * checked, see: LowImageCoherencyThreshold.
+ * \return TRUE if the image coherency should be shown, FALSE otherwise.
+ */
 BOOLEAN PhpShouldShowImageCoherency(
     _In_ PPH_PROCESS_ITEM ProcessItem,
     _In_ BOOLEAN CheckThreshold
@@ -6363,6 +6388,13 @@ BOOLEAN PhpShouldShowImageCoherency(
     return FALSE;
 }
 
+/**
+ * Retrieves the Win32 file name of the process associated with the specified process item.
+ *
+ * \param ProcessItem A pointer to a PPH_PROCESS_ITEM structure representing the process.
+ * \param FileNameWin32 A pointer to a variable that receives a pointer to a PPH_STRING containing the Win32 file name.
+ * \return NTSTATUS Successful or errant status.
+ */
 NTSTATUS PhGetProcessItemFileNameWin32(
     _In_ PPH_PROCESS_ITEM ProcessItem,
     _Out_ PPH_STRING* FileNameWin32

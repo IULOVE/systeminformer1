@@ -14,6 +14,7 @@
 #include <procprp.h>
 #include <procprpp.h>
 #include <settings.h>
+#include <phsettings.h>
 
 #include <cpysave.h>
 #include <emenu.h>
@@ -139,7 +140,7 @@ VOID PhShowMemoryContextMenu(
 
     PhGetSelectedMemoryNodes(&Context->ListContext, &memoryNodes, &numberOfMemoryNodes);
 
-    //if (numberOfMemoryNodes != 0)
+    if (numberOfMemoryNodes != 0)
     {
         PPH_EMENU menu;
         PPH_EMENU_ITEM item;
@@ -579,6 +580,13 @@ INT_PTR CALLBACK PhpProcessMemoryDlgProc(
 
             // Initialize the list.
             PhInitializeMemoryList(hwndDlg, memoryContext->TreeNewHandle, &memoryContext->ListContext);
+
+            if (PhTreeWindowFont)
+            {
+                memoryContext->TreeNewFont = PhCreateTreeWindowFont(PhGetWindowDpi(hwndDlg));
+                SetWindowFont(memoryContext->TreeNewHandle, memoryContext->TreeNewFont, FALSE);
+            }
+
             TreeNew_SetEmptyText(memoryContext->TreeNewHandle, &PhProcessPropPageLoadingText, 0);
 
             memoryContext->AllocationFilterEntry = PhAddTreeNewFilter(&memoryContext->ListContext.AllocationTreeFilterSupport, PhpMemoryTreeFilterCallback, memoryContext);
@@ -629,6 +637,9 @@ INT_PTR CALLBACK PhpProcessMemoryDlgProc(
 
             PhSaveSettingsMemoryList(&memoryContext->ListContext);
 
+            if (memoryContext->TreeNewFont)
+                DeleteFont(memoryContext->TreeNewFont);
+
             PhDereferenceObject(memoryContext);
         }
         break;
@@ -641,6 +652,17 @@ INT_PTR CALLBACK PhpProcessMemoryDlgProc(
                 PhAddPropPageLayoutItem(hwndDlg, memoryContext->SearchboxHandle, dialogItem, PH_ANCHOR_TOP | PH_ANCHOR_RIGHT);
                 PhAddPropPageLayoutItem(hwndDlg, memoryContext->ListContext.TreeNewHandle, dialogItem, PH_ANCHOR_ALL);
                 PhEndPropPageLayout(hwndDlg, propPageContext);
+            }
+        }
+        break;
+    case WM_DPICHANGED_AFTERPARENT:
+        {
+            if (PhTreeWindowFont)
+            {
+                HFONT treeNewFont;
+
+                if (treeNewFont = PhCreateTreeWindowFont(PhGetWindowDpi(hwndDlg)))
+                    PhReplaceWindowFont(&memoryContext->TreeNewFont, memoryContext->TreeNewHandle, treeNewFont, TRUE);
             }
         }
         break;
@@ -861,7 +883,8 @@ INT_PTR CALLBACK PhpProcessMemoryDlgProc(
                     PPH_EMENU_ITEM zeroPadItem;
                     PPH_EMENU_ITEM selectedItem;
 
-                    GetWindowRect(GetDlgItem(hwndDlg, IDC_FILTEROPTIONS), &rect);
+                    if (!PhGetWindowRect(GetDlgItem(hwndDlg, IDC_FILTEROPTIONS), &rect))
+                        break;
 
                     typedef enum _PH_MEMORY_FILTER_MENU_ITEM
                     {
@@ -988,7 +1011,7 @@ INT_PTR CALLBACK PhpProcessMemoryDlgProc(
                         }
                         else if (selectedItem->Id == PH_MEMORY_FILTER_MENU_STRINGS)
                         {
-                            if (PhGetIntegerSetting(L"EnableMemStringsTreeDialog"))
+                            if (PhGetIntegerSetting(SETTING_ENABLE_MEM_STRINGS_TREE_DIALOG))
                                 PhShowMemoryStringTreeDialog(hwndDlg, processItem);
                             else
                                 PhShowMemoryStringDialog(hwndDlg, processItem);
@@ -1014,7 +1037,7 @@ INT_PTR CALLBACK PhpProcessMemoryDlgProc(
                                 PH_CHOICE_DIALOG_USER_CHOICE,
                                 &selectedChoice,
                                 NULL,
-                                L"MemoryReadWriteAddressChoices"
+                                SETTING_MEMORY_READ_WRITE_ADDRESS_CHOICES
                                 ))
                             {
                                 ULONG64 address64;

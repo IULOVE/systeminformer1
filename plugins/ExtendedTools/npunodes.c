@@ -16,10 +16,24 @@
 #define GRAPH_PADDING 5
 static RECT NormalGraphTextMargin = { 5, 5, 5, 5 };
 static RECT NormalGraphTextPadding = { 3, 3, 3, 3 };
+static RECT NormalGraphTextMarginScaled = { 5, 5, 5, 5 };
+static RECT NormalGraphTextPaddingScaled = { 3, 3, 3, 3 };
+static LONG NpuNodesWindowDpi = USER_DEFAULT_SCREEN_DPI;
+
+static VOID EtpNpuNodesUpdateDpiCache(
+    _In_ HWND WindowHandle
+    )
+{
+    NpuNodesWindowDpi = PhGetWindowDpi(WindowHandle);
+    NormalGraphTextMarginScaled = NormalGraphTextMargin;
+    NormalGraphTextPaddingScaled = NormalGraphTextPadding;
+    PhGetMarginDpiValue(&NormalGraphTextMarginScaled, NpuNodesWindowDpi, TRUE);
+    PhGetMarginDpiValue(&NormalGraphTextPaddingScaled, NpuNodesWindowDpi, TRUE);
+}
 
 INT_PTR CALLBACK EtpNpuNodesDlgProc(
-    _In_ HWND hwndDlg,
-    _In_ UINT uMsg,
+    _In_ HWND WindowHandle,
+    _In_ UINT WindowMessage,
     _In_ WPARAM wParam,
     _In_ LPARAM lParam
     );
@@ -35,6 +49,7 @@ static HANDLE EtNpuNodesThreadHandle = NULL;
 static HWND EtNpuNodesWindowHandle = NULL;
 static PH_EVENT EtNpuNodesInitializedEvent = PH_EVENT_INIT;
 
+_Function_class_(USER_THREAD_START_ROUTINE)
 NTSTATUS EtpNpuNodesDialogThreadStart(
     _In_ PVOID Parameter
     )
@@ -108,13 +123,13 @@ static VOID ProcessesUpdatedCallback(
 }
 
 INT_PTR CALLBACK EtpNpuNodesDlgProc(
-    _In_ HWND hwndDlg,
-    _In_ UINT uMsg,
+    _In_ HWND WindowHandle,
+    _In_ UINT WindowMessage,
     _In_ WPARAM wParam,
     _In_ LPARAM lParam
     )
 {
-    switch (uMsg)
+    switch (WindowMessage)
     {
     case WM_INITDIALOG:
         {
@@ -122,10 +137,12 @@ INT_PTR CALLBACK EtpNpuNodesDlgProc(
             ULONG numberOfRows;
             ULONG numberOfColumns;
 
-            PhSetApplicationWindowIcon(hwndDlg);
+            PhSetApplicationWindowIcon(WindowHandle);
 
-            PhInitializeLayoutManager(&LayoutManager, hwndDlg);
-            LayoutMargin = PhAddLayoutItem(&LayoutManager, GetDlgItem(hwndDlg, IDC_LAYOUT), NULL, PH_ANCHOR_ALL)->Margin;
+            PhInitializeLayoutManager(&LayoutManager, WindowHandle);
+            LayoutMargin = PhAddLayoutItem(&LayoutManager, GetDlgItem(WindowHandle, IDC_LAYOUT), NULL, PH_ANCHOR_ALL)->Margin;
+
+            EtpNpuNodesUpdateDpiCache(WindowHandle);
 
             GraphHandle = PhAllocate(sizeof(HWND) * EtNpuTotalNodeCount);
             GraphState = PhAllocate(sizeof(PH_GRAPH_STATE) * EtNpuTotalNodeCount);
@@ -140,7 +157,7 @@ INT_PTR CALLBACK EtpNpuNodesDlgProc(
                     0,
                     0,
                     0,
-                    hwndDlg,
+                    WindowHandle,
                     NULL,
                     NULL,
                     NULL
@@ -158,31 +175,31 @@ INT_PTR CALLBACK EtpNpuNodesDlgProc(
             MinimumSize.top = 0;
             MinimumSize.right = 55;
             MinimumSize.bottom = 60;
-            MapDialogRect(hwndDlg, &MinimumSize);
+            MapDialogRect(WindowHandle, &MinimumSize);
             MinimumSize.right += (MinimumSize.right + GRAPH_PADDING) * numberOfColumns;
             MinimumSize.bottom += (MinimumSize.bottom + GRAPH_PADDING) * numberOfRows;
 
-            SetWindowPos(hwndDlg, NULL, 0, 0, MinimumSize.right, MinimumSize.bottom, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER);
+            SetWindowPos(WindowHandle, NULL, 0, 0, MinimumSize.right, MinimumSize.bottom, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER);
 
             // Note: This dialog must be centered after all other graphs and controls have been added.
             if (PhValidWindowPlacementFromSetting(SETTING_NAME_NPU_NODES_WINDOW_POSITION))
-                PhLoadWindowPlacementFromSetting(SETTING_NAME_NPU_NODES_WINDOW_POSITION, SETTING_NAME_NPU_NODES_WINDOW_SIZE, hwndDlg);
+                PhLoadWindowPlacementFromSetting(SETTING_NAME_NPU_NODES_WINDOW_POSITION, SETTING_NAME_NPU_NODES_WINDOW_SIZE, WindowHandle);
             else
-                PhCenterWindow(hwndDlg, (HWND)lParam);
+                PhCenterWindow(WindowHandle, (HWND)lParam);
 
             PhRegisterCallback(
                 PhGetGeneralCallback(GeneralCallbackProcessProviderUpdatedEvent),
                 ProcessesUpdatedCallback,
-                hwndDlg,
+                WindowHandle,
                 &ProcessesUpdatedCallbackRegistration
                 );
 
-            PhInitializeWindowTheme(hwndDlg, !!PhGetIntegerSetting(L"EnableThemeSupport"));
+            PhInitializeWindowTheme(WindowHandle, !!PhGetIntegerSetting(SETTING_ENABLE_THEME_SUPPORT));
         }
         break;
     case WM_DESTROY:
         {
-            PhSaveWindowPlacementToSetting(SETTING_NAME_NPU_NODES_WINDOW_POSITION, SETTING_NAME_NPU_NODES_WINDOW_SIZE, hwndDlg);
+            PhSaveWindowPlacementToSetting(SETTING_NAME_NPU_NODES_WINDOW_POSITION, SETTING_NAME_NPU_NODES_WINDOW_SIZE, WindowHandle);
 
             PhUnregisterCallback(PhGetGeneralCallback(GeneralCallbackProcessProviderUpdatedEvent), &ProcessesUpdatedCallbackRegistration);
 
@@ -197,6 +214,13 @@ INT_PTR CALLBACK EtpNpuNodesDlgProc(
             PhDeleteLayoutManager(&LayoutManager);
 
             PostQuitMessage(0);
+        }
+        break;
+    case WM_DPICHANGED:
+        {
+            EtpNpuNodesUpdateDpiCache(WindowHandle);
+            PhLayoutManagerUpdate(&LayoutManager, LOWORD(wParam));
+            PhLayoutManagerLayout(&LayoutManager);
         }
         break;
     case WM_SIZE:
@@ -223,7 +247,7 @@ INT_PTR CALLBACK EtpNpuNodesDlgProc(
 
             deferHandle = BeginDeferWindowPos(EtNpuTotalNodeCount);
 
-            PhGetClientRect(hwndDlg, &clientRect);
+            PhGetClientRect(WindowHandle, &clientRect);
             cellHeight = (clientRect.bottom - LayoutMargin.top - LayoutMargin.bottom - GRAPH_PADDING * numberOfYPaddings) / numberOfRows;
             y = LayoutMargin.top;
             i = 0;
@@ -278,7 +302,7 @@ INT_PTR CALLBACK EtpNpuNodesDlgProc(
             switch (GET_WM_COMMAND_ID(wParam, lParam))
             {
             case IDCANCEL:
-                DestroyWindow(hwndDlg);
+                DestroyWindow(WindowHandle);
                 break;
             }
         }
@@ -294,20 +318,11 @@ INT_PTR CALLBACK EtpNpuNodesDlgProc(
                 {
                     PPH_GRAPH_GETDRAWINFO getDrawInfo = (PPH_GRAPH_GETDRAWINFO)header;
                     PPH_GRAPH_DRAW_INFO drawInfo = getDrawInfo->DrawInfo;
-                    RECT margin;
-                    RECT padding;
-                    LONG dpiValue;
-
-                    margin = NormalGraphTextMargin;
-                    padding = NormalGraphTextPadding;
-
-                    dpiValue = PhGetWindowDpi(hwndDlg);
-
-                    PhGetSizeDpiValue(&margin, dpiValue, TRUE);
-                    PhGetSizeDpiValue(&padding, dpiValue, TRUE);
+                    RECT margin = NormalGraphTextMarginScaled;
+                    RECT padding = NormalGraphTextPaddingScaled;
 
                     drawInfo->Flags = PH_GRAPH_USE_GRID_X | PH_GRAPH_USE_GRID_Y | (EtEnableScaleGraph ? PH_GRAPH_LABEL_MAX_Y : 0);
-                    PhSiSetColorsGraphDrawInfo(drawInfo, PhGetIntegerSetting(L"ColorCpuKernel"), 0, dpiValue);
+                    PhSiSetColorsGraphDrawInfo(drawInfo, PhGetIntegerSetting(SETTING_COLOR_CPU_KERNEL), 0, NpuNodesWindowDpi);
 
                     for (i = 0; i < EtNpuTotalNodeCount; i++)
                     {
@@ -515,12 +530,12 @@ INT_PTR CALLBACK EtpNpuNodesDlgProc(
                 Graph_Draw(GraphHandle[i]);
             }
 
-            if (IsMinimized(hwndDlg))
-                ShowWindow(hwndDlg, SW_RESTORE);
+            if (IsMinimized(WindowHandle))
+                ShowWindow(WindowHandle, SW_RESTORE);
             else
-                ShowWindow(hwndDlg, SW_SHOW);
+                ShowWindow(WindowHandle, SW_SHOW);
 
-            SetForegroundWindow(hwndDlg);
+            SetForegroundWindow(WindowHandle);
         }
         break;
     case WM_PH_UPDATE_DIALOG:
@@ -537,11 +552,11 @@ INT_PTR CALLBACK EtpNpuNodesDlgProc(
         }
         break;
     case WM_CTLCOLORBTN:
-        return HANDLE_WM_CTLCOLORBTN(hwndDlg, wParam, lParam, PhWindowThemeControlColor);
+        return HANDLE_WM_CTLCOLORBTN(WindowHandle, wParam, lParam, PhWindowThemeControlColor);
     case WM_CTLCOLORDLG:
-        return HANDLE_WM_CTLCOLORDLG(hwndDlg, wParam, lParam, PhWindowThemeControlColor);
+        return HANDLE_WM_CTLCOLORDLG(WindowHandle, wParam, lParam, PhWindowThemeControlColor);
     case WM_CTLCOLORSTATIC:
-        return HANDLE_WM_CTLCOLORSTATIC(hwndDlg, wParam, lParam, PhWindowThemeControlColor);
+        return HANDLE_WM_CTLCOLORSTATIC(WindowHandle, wParam, lParam, PhWindowThemeControlColor);
     }
 
     return FALSE;

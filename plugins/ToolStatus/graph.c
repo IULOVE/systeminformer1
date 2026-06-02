@@ -160,11 +160,27 @@ VOID ToolbarGraphsInitializeDpi(
     VOID
     )
 {
+    ULONG newDpi = SystemInformer_GetWindowDpi();
+    ULONG newWidth = PhScaleToDisplay(145, newDpi);
+
     for (ULONG i = 0; i < PhpToolbarGraphList->Count; i++)
     {
         PPH_TOOLBAR_GRAPH graph = PhpToolbarGraphList->Items[i];
+        ULONG bandIndex;
 
-        graph->GraphDpi = SystemInformer_GetWindowDpi();
+        graph->GraphDpi = newDpi;
+
+        // Update the rebar band's minimum width to match the new DPI scale.
+        if (graph->GraphHandle && (bandIndex = RebarBandToIndex(graph->GraphId)) != ULONG_MAX)
+        {
+            BAND_CHILD_SIZE bandSize;
+
+            if (RebarGetBandIndexChildSize(bandIndex, &bandSize))
+            {
+                bandSize.MinChildWidth = newWidth;
+                RebarSetBandIndexChildSize(bandIndex, &bandSize);
+            }
+        }
     }
 }
 
@@ -215,7 +231,7 @@ BOOLEAN ToolbarAddGraph(
             NULL,
             WS_VISIBLE | WS_CHILD | WS_BORDER,
             0, 0, 0, 0,
-            MainWindowHandle,
+            RebarHandle,
             NULL,
             NULL,
             &graphCreateParams
@@ -272,7 +288,7 @@ VOID ToolbarCreateGraphs(
         ULONG width;
 
         height = (ULONG)SendMessage(RebarHandle, RB_GETROWHEIGHT, REBAR_BAND_ID_TOOLBAR, 0);
-        width = PhGetDpi(145, SystemInformer_GetWindowDpi());
+        width = PhScaleToDisplay(145, SystemInformer_GetWindowDpi());
 
         for (ULONG i = 0; i < PhpToolbarGraphList->Count; i++)
         {
@@ -283,6 +299,23 @@ VOID ToolbarCreateGraphs(
 
             ToolbarAddGraph(graph, width, height);
         }
+    }
+}
+
+VOID ToolbarDestroyGraphs(
+    VOID
+    )
+{
+    if (!PhpToolbarGraphList)
+        return;
+
+    ToolbarGraphSaveSettings();
+
+    for (ULONG i = 0; i < PhpToolbarGraphList->Count; i++)
+    {
+        PPH_TOOLBAR_GRAPH graph = PhpToolbarGraphList->Items[i];
+
+        ToolbarRemoveGraph(graph);
     }
 }
 
@@ -374,7 +407,7 @@ VOID ToolbarSetVisibleGraph(
     if (Visible)
     {
         ULONG height = (ULONG)SendMessage(RebarHandle, RB_GETROWHEIGHT, REBAR_BAND_ID_TOOLBAR, 0);
-        ULONG width = PhGetDpi(145, SystemInformer_GetWindowDpi());
+        ULONG width = PhScaleToDisplay(145, SystemInformer_GetWindowDpi());
 
         SetFlag(Graph->Flags, TOOLSTATUS_GRAPH_ENABLED);
         ToolbarAddGraph(Graph, width, height);
@@ -523,7 +556,7 @@ VOID ToolbarUpdateVisibleGraph(
         return;
     }
 
-    ToolbarSetVisibleGraph(icon, !(icon->Flags & PH_NF_ICON_ENABLED));
+    ToolbarSetVisibleGraph(icon, !(icon->Flags & TOOLSTATUS_GRAPH_ENABLED));
 
     ToolbarGraphSaveSettings();
     ReBarSaveLayoutSettings();
@@ -713,7 +746,7 @@ static PPH_STRING PhSipGetMaxIoString(
 // END copied from ProcessHacker/sysinfo.c
 //
 
-_Function_class_(TOOLSTATUS_GRAPH_CALLBACK)
+_Function_class_(PH_GRAPH_MESSAGE_CALLBACK)
 BOOLEAN CpuHistoryGraphMessageCallback(
     _In_ HWND WindowHandle,
     _In_ ULONG Message,
@@ -733,8 +766,8 @@ BOOLEAN CpuHistoryGraphMessageCallback(
             if (graph->GraphDpi == 0)
             {
                 graph->GraphDpi = SystemInformer_GetWindowDpi();
-                graph->GraphColor1 = PhGetIntegerSetting(L"ColorCpuKernel");
-                graph->GraphColor2 = PhGetIntegerSetting(L"ColorCpuUser");
+                graph->GraphColor1 = PhGetIntegerSetting(SETTING_COLOR_CPU_KERNEL);
+                graph->GraphColor2 = PhGetIntegerSetting(SETTING_COLOR_CPU_USER);
             }
 
             drawInfo->Flags = PH_GRAPH_USE_GRID_X | PH_GRAPH_USE_LINE_2;
@@ -810,6 +843,10 @@ BOOLEAN CpuHistoryGraphMessageCallback(
                     }
                 }
             }
+            else if (mouseEvent->Message == WM_RBUTTONUP)
+            {
+                ShowCustomizeMenu(WindowHandle);
+            }
         }
         break;
     }
@@ -817,7 +854,7 @@ BOOLEAN CpuHistoryGraphMessageCallback(
     return TRUE;
 }
 
-_Function_class_(TOOLSTATUS_GRAPH_CALLBACK)
+_Function_class_(PH_GRAPH_MESSAGE_CALLBACK)
 BOOLEAN PhysicalHistoryGraphMessageCallback(
     _In_ HWND WindowHandle,
     _In_ ULONG Message,
@@ -837,7 +874,7 @@ BOOLEAN PhysicalHistoryGraphMessageCallback(
             if (graph->GraphDpi == 0)
             {
                 graph->GraphDpi = SystemInformer_GetWindowDpi();
-                graph->GraphColor1 = PhGetIntegerSetting(L"ColorPhysical");
+                graph->GraphColor1 = PhGetIntegerSetting(SETTING_COLOR_PHYSICAL);
             }
 
             drawInfo->Flags = PH_GRAPH_USE_GRID_X;
@@ -850,9 +887,16 @@ BOOLEAN PhysicalHistoryGraphMessageCallback(
 
             if (!graph->GraphState.Valid)
             {
-                for (ULONG i = 0; i < drawInfo->LineDataCount; i++)
+                if (EnableAvxSupport && drawInfo->LineDataCount > 128)
                 {
-                    graph->GraphState.Data1[i] = (FLOAT)PhGetItemCircularBuffer_ULONG(SystemStatistics.PhysicalHistory, i);
+                    PhCopyConvertCircularBufferULONG(SystemStatistics.PhysicalHistory, graph->GraphState.Data1, drawInfo->LineDataCount);
+                }
+                else
+                {
+                    for (ULONG i = 0; i < drawInfo->LineDataCount; i++)
+                    {
+                        graph->GraphState.Data1[i] = (FLOAT)PhGetItemCircularBuffer_ULONG(SystemStatistics.PhysicalHistory, i);
+                    }
                 }
 
                 PhDivideSinglesBySingle(
@@ -906,6 +950,10 @@ BOOLEAN PhysicalHistoryGraphMessageCallback(
                     PhShowSystemInformationDialog(L"Memory");
                 }
             }
+            else if (mouseEvent->Message == WM_RBUTTONUP)
+            {
+                ShowCustomizeMenu(WindowHandle);
+            }
         }
         break;
     }
@@ -913,7 +961,7 @@ BOOLEAN PhysicalHistoryGraphMessageCallback(
     return TRUE;
 }
 
-_Function_class_(TOOLSTATUS_GRAPH_CALLBACK)
+_Function_class_(PH_GRAPH_MESSAGE_CALLBACK)
 BOOLEAN CommitHistoryGraphMessageCallback(
     _In_ HWND WindowHandle,
     _In_ ULONG Message,
@@ -933,7 +981,7 @@ BOOLEAN CommitHistoryGraphMessageCallback(
             if (graph->GraphDpi == 0)
             {
                 graph->GraphDpi = SystemInformer_GetWindowDpi();
-                graph->GraphColor1 = PhGetIntegerSetting(L"ColorPrivate");
+                graph->GraphColor1 = PhGetIntegerSetting(SETTING_COLOR_PRIVATE);
             }
 
             drawInfo->Flags = PH_GRAPH_USE_GRID_X;
@@ -946,9 +994,16 @@ BOOLEAN CommitHistoryGraphMessageCallback(
 
             if (!graph->GraphState.Valid)
             {
-                for (ULONG i = 0; i < drawInfo->LineDataCount; i++)
+                if (EnableAvxSupport && drawInfo->LineDataCount > 128)
                 {
-                    graph->GraphState.Data1[i] = (FLOAT)PhGetItemCircularBuffer_ULONG(SystemStatistics.CommitHistory, i);
+                    PhCopyConvertCircularBufferULONG(SystemStatistics.CommitHistory, graph->GraphState.Data1, drawInfo->LineDataCount);
+                }
+                else
+                {
+                    for (ULONG i = 0; i < drawInfo->LineDataCount; i++)
+                    {
+                        graph->GraphState.Data1[i] = (FLOAT)PhGetItemCircularBuffer_ULONG(SystemStatistics.CommitHistory, i);
+                    }
                 }
 
                 PhDivideSinglesBySingle(
@@ -1002,6 +1057,10 @@ BOOLEAN CommitHistoryGraphMessageCallback(
                     PhShowSystemInformationDialog(L"Memory");
                 }
             }
+            else if (mouseEvent->Message == WM_RBUTTONUP)
+            {
+                ShowCustomizeMenu(WindowHandle);
+            }
         }
         break;
     }
@@ -1009,7 +1068,7 @@ BOOLEAN CommitHistoryGraphMessageCallback(
     return TRUE;
 }
 
-_Function_class_(TOOLSTATUS_GRAPH_CALLBACK)
+_Function_class_(PH_GRAPH_MESSAGE_CALLBACK)
 BOOLEAN IoHistoryGraphMessageCallback(
     _In_ HWND WindowHandle,
     _In_ ULONG Message,
@@ -1029,8 +1088,8 @@ BOOLEAN IoHistoryGraphMessageCallback(
             if (graph->GraphDpi == 0)
             {
                 graph->GraphDpi = SystemInformer_GetWindowDpi();
-                graph->GraphColor1 = PhGetIntegerSetting(L"ColorIoReadOther");
-                graph->GraphColor2 = PhGetIntegerSetting(L"ColorIoWrite");
+                graph->GraphColor1 = PhGetIntegerSetting(SETTING_COLOR_IO_READ_OTHER);
+                graph->GraphColor2 = PhGetIntegerSetting(SETTING_COLOR_IO_WRITE);
             }
 
             drawInfo->Flags = PH_GRAPH_USE_GRID_X | PH_GRAPH_USE_LINE_2;
@@ -1127,6 +1186,10 @@ BOOLEAN IoHistoryGraphMessageCallback(
                         PhDereferenceProcessRecord(record);
                     }
                 }
+            }
+            else if (mouseEvent->Message == WM_RBUTTONUP)
+            {
+                ShowCustomizeMenu(WindowHandle);
             }
         }
         break;

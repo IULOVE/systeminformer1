@@ -39,6 +39,10 @@ PH_STARTUP_PARAMETERS PhStartupParameters = { .UpdateChannel = PhInvalidChannel 
 PH_PROVIDER_THREAD PhPrimaryProviderThread;
 PH_PROVIDER_THREAD PhSecondaryProviderThread;
 PH_PROVIDER_THREAD PhTertiaryProviderThread;
+RTL_ATOM PhTreeWindowAtom = RTL_ATOM_INVALID_ATOM;
+RTL_ATOM PhGraphWindowAtom = RTL_ATOM_INVALID_ATOM;
+RTL_ATOM PhHexEditWindowAtom = RTL_ATOM_INVALID_ATOM;
+RTL_ATOM PhColorBoxWindowAtom = RTL_ATOM_INVALID_ATOM;
 static PPH_LIST DialogList = NULL;
 static PPH_LIST FilterList = NULL;
 static PH_AUTO_POOL BaseAutoPool;
@@ -61,6 +65,8 @@ INT WINAPI wWinMain(
         return 1;
     if (!NT_SUCCESS(PhInitializeExceptionPolicy()))
         return 1;
+    if (!NT_SUCCESS(PhInitializeExecutionPolicy()))
+        return 1;
     if (!NT_SUCCESS(PhInitializeNamespacePolicy()))
         return 1;
     if (!NT_SUCCESS(PhInitializeComPolicy()))
@@ -77,8 +83,16 @@ INT WINAPI wWinMain(
     PhGuiSupportInitialization();
 
     PhInitializeAppSettings();
+    PhInitializeCallbacks();
+
+    if (PhStartupParameters.Debug)
+    {
+        PhShowDebugConsole();
+    }
 
     PhInitializePreviousInstance();
+
+    PhInitializeCallbacks();
 
     if (PhEnableKsiSupport &&
         !PhStartupParameters.ShowOptions)
@@ -100,7 +114,6 @@ INT WINAPI wWinMain(
     PhInitializeCommonControls();
 
     PhInitializeAppSystem();
-    PhInitializeCallbacks();
     PhEmInitialization();
 
     if (PhStartupParameters.ShowOptions)
@@ -146,7 +159,7 @@ INT WINAPI wWinMain(
 
     // Set the default timer resolution.
     {
-        if (WindowsVersion > WINDOWS_11)
+        if (WindowsVersion >= WINDOWS_11_24H2)
         {
             PhSetProcessPowerThrottlingState(
                 NtCurrentProcess(),
@@ -194,6 +207,14 @@ INT WINAPI wWinMain(
     return result;
 }
 
+/**
+ * The main message loop for System Informer.
+ *
+ * Processes Windows messages for the main window, dialogs, and registered message loop filters.
+ * Handles accelerator keys, dialog messages, and dispatches messages to the appropriate handlers.
+ * Drains the auto pool after each message to manage memory efficiently.
+ * \return The exit code of the application, typically the wParam of the WM_QUIT message.
+ */
 LONG PhMainMessageLoop(
     VOID
     )
@@ -262,6 +283,16 @@ LONG PhMainMessageLoop(
     return (LONG)message.wParam;
 }
 
+/**
+ * Registers a dialog window handle with the application's dialog list.
+ *
+ * This function adds the specified dialog window handle to the internal list of dialogs
+ * managed by the application. This allows the main message loop to recognize and process
+ * messages for the dialog, enabling features such as keyboard navigation and message routing.
+ *
+ * \param DialogWindowHandle The handle to the dialog window to register.
+ * \remarks Registered dialogs are processed in the main message loop for dialog-specific messages.
+ */
 VOID PhRegisterDialog(
     _In_ HWND DialogWindowHandle
     )
@@ -272,6 +303,17 @@ VOID PhRegisterDialog(
     PhAddItemList(DialogList, (PVOID)DialogWindowHandle);
 }
 
+/**
+ * Unregisters a dialog window handle from the application's dialog list.
+ *
+ * This function removes the specified dialog window handle from the internal list of dialogs
+ * managed by the application. This ensures that the main message loop no longer processes
+ * messages for the dialog, disabling features such as keyboard navigation and message routing
+ * for the unregistered dialog.
+ *
+ * \param DialogWindowHandle The handle to the dialog window to unregister.
+ * \remarks Unregistered dialogs are no longer processed in the main message loop for dialog-specific messages.
+ */
 VOID PhUnregisterDialog(
     _In_ HWND DialogWindowHandle
     )
@@ -287,6 +329,19 @@ VOID PhUnregisterDialog(
         PhRemoveItemList(DialogList, indexOfDialog);
 }
 
+/**
+ * Registers a message loop filter with the application's message loop.
+ *
+ * This function adds a custom filter to the internal list of message loop filters.
+ * Each filter is a callback that can intercept and process Windows messages before
+ * they are handled by the main window or dialogs. Filters are useful for implementing
+ * global hotkeys, custom message handling, or preprocessing messages.
+ *
+ * \param Filter The filter callback function to register.
+ * \param Context Optional context pointer passed to the filter callback.
+ * \return A pointer to the filter entry, which can be used to unregister the filter later.
+ * \remarks The filter will be called for each message in the main message loop.
+ */
 PPH_MESSAGE_LOOP_FILTER_ENTRY PhRegisterMessageLoopFilter(
     _In_ PPH_MESSAGE_LOOP_FILTER Filter,
     _In_opt_ PVOID Context
@@ -305,6 +360,15 @@ PPH_MESSAGE_LOOP_FILTER_ENTRY PhRegisterMessageLoopFilter(
     return entry;
 }
 
+/**
+ * Unregisters a message loop filter from the application's message loop.
+ *
+ * This function removes a previously registered message loop filter, ensuring
+ * it no longer receives messages from the main message loop.
+ *
+ * \param FilterEntry The filter entry returned by PhRegisterMessageLoopFilter.
+ * \remarks The filter entry is freed after removal.
+ */
 VOID PhUnregisterMessageLoopFilter(
     _In_ PPH_MESSAGE_LOOP_FILTER_ENTRY FilterEntry
     )
@@ -322,12 +386,29 @@ VOID PhUnregisterMessageLoopFilter(
     PhFree(FilterEntry);
 }
 
+/**
+ * Context structure for tracking a previous main window instance.
+ *
+ * Used during enumeration of windows to identify and interact with a previous
+ * instance of the application, based on process ID and window class name.
+ */
 typedef struct _PHP_PREVIOUS_MAIN_WINDOW_CONTEXT
 {
     HANDLE ProcessId;
     PPH_STRING WindowName;
 } PHP_PREVIOUS_MAIN_WINDOW_CONTEXT, *PPHP_PREVIOUS_MAIN_WINDOW_CONTEXT;
 
+/**
+ * Callback function for enumerating windows to find a previous instance.
+ *
+ * Checks if the given window belongs to the specified process and matches the
+ * expected window class name. If found, attempts to activate and bring the window
+ * to the foreground.
+ *
+ * \param WindowHandle The handle to the window being enumerated.
+ * \param Context Pointer to a PHP_PREVIOUS_MAIN_WINDOW_CONTEXT structure.
+ * \return FALSE if the previous instance window was found and activated; TRUE to continue enumeration.
+ */
 _Function_class_(PH_WINDOW_ENUM_CALLBACK)
 static BOOLEAN CALLBACK PhPreviousInstanceWindowEnumProc(
     _In_ HWND WindowHandle,
@@ -368,9 +449,23 @@ static BOOLEAN CALLBACK PhPreviousInstanceWindowEnumProc(
 
                 if (result == PH_ACTIVATE_REPLY)
                 {
-                    SetForegroundWindow(WindowHandle);
+                    if (!IsWindowVisible(WindowHandle))
+                    {
+                        ShowWindow(WindowHandle, SW_SHOW);
+                    }
+
+                    if (IsIconic(WindowHandle))
+                    {
+                        ShowWindow(WindowHandle, SW_RESTORE);
+                    }
+
+                    if (!SetForegroundWindow(WindowHandle))
+                    {
+                        PhBringWindowToTop(WindowHandle);
+                    }
 
                     PhExitApplication(STATUS_SUCCESS);
+                    return FALSE;
                 }
             }
         }
@@ -379,6 +474,15 @@ static BOOLEAN CALLBACK PhPreviousInstanceWindowEnumProc(
     return TRUE;
 }
 
+/**
+ * Brings a previous instance of the application to the foreground.
+ *
+ * This function attempts to locate the main window of a previous instance of the
+ * application (by process ID and window class name), and brings it to the foreground.
+ * It performs several checks to ensure the process is in the same session and owned
+ * by the same user. The search is retried multiple times to handle race conditions.
+ * \param ProcessId The process ID of the previous instance.
+ */
 static VOID PhForegroundPreviousInstance(
     _In_ HANDLE ProcessId
     )
@@ -414,7 +518,7 @@ static VOID PhForegroundPreviousInstance(
     // Try to locate the window a few times because some users reported that it might not yet have been created. (dmex)
     do
     {
-        PhEnumWindows(PhPreviousInstanceWindowEnumProc, &context);
+        PhEnumWindowsEx(NULL, PhPreviousInstanceWindowEnumProc, &context);
         PhDelayExecution(500);
     } while (++attempts < 10);
 
@@ -439,6 +543,14 @@ CleanupExit:
         );
 }
 
+/**
+ * Initializes previous instance detection and activation logic.
+ *
+ * This function enforces single-instance behavior and handles elevation scenarios.
+ * If only one instance is allowed, it attempts to activate a previous instance.
+ * If elevation is required, it runs the application as administrator and activates
+ * the previous instance if necessary.
+ */
 VOID PhInitializePreviousInstance(
     VOID
     )
@@ -480,6 +592,20 @@ VOID PhInitializePreviousInstance(
     }
 }
 
+/**
+ * Callback for enumerating namespace objects to find previous instances.
+ *
+ * This function is called for each object in the namespace directory. It looks for
+ * mutant objects and, if found, checks if they belong to a different process.
+ * If so, it attempts to bring the previous instance to the foreground.
+ *
+ * \param RootDirectory The root directory handle.
+ * \param Name The name of the object.
+ * \param TypeName The type name of the object.
+ * \param Context Optional context pointer.
+ * \return STATUS_NO_MORE_ENTRIES if a previous instance
+ * was found and activated; otherwise STATUS_SUCCESS.
+ */
 _Function_class_(PH_ENUM_DIRECTORY_OBJECTS)
 NTSTATUS NTAPI PhpPreviousInstancesCallback(
     _In_ HANDLE RootDirectory,
@@ -492,7 +618,7 @@ NTSTATUS NTAPI PhpPreviousInstancesCallback(
     HANDLE objectHandle;
 
     if (!PhStartsWithStringRef2(Name, L"SiMutant_", FALSE))
-        return STATUS_NAME_TOO_LONG;
+        return STATUS_SUCCESS;
 
     if (NT_SUCCESS(PhOpenMutant(
         &objectHandle,
@@ -509,6 +635,8 @@ NTSTATUS NTAPI PhpPreviousInstancesCallback(
             if (objectInfo.ClientId.UniqueProcess != NtCurrentProcessId())
             {
                 PhForegroundPreviousInstance(objectInfo.ClientId.UniqueProcess);
+
+                NtClose(objectHandle);
                 return STATUS_NO_MORE_ENTRIES;
             }
         }
@@ -519,6 +647,13 @@ NTSTATUS NTAPI PhpPreviousInstancesCallback(
     return STATUS_SUCCESS;
 }
 
+/**
+ * Activates a previous instance of the application if one exists.
+ *
+ * This function enumerates namespace objects to find a mutant object representing
+ * a previous instance. If found, it brings the previous instance's window to the
+ * foreground and exits the current process.
+ */
 VOID PhActivatePreviousInstance(
     VOID
     )
@@ -542,45 +677,54 @@ VOID PhActivatePreviousInstance(
     //        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
     //        NULL
     //        )))
+    //
     //    {
     //        PFILE_PROCESS_IDS_USING_FILE_INFORMATION processIds;
-
+    //
     //        if (NT_SUCCESS(status = PhGetProcessIdsUsingFile(
     //            fileHandle,
     //            &processIds
     //            )))
+    //
     //        {
     //            for (ULONG i = 0; i < processIds->NumberOfProcessIdsInList; i++)
     //            {
     //                HANDLE processId = processIds->ProcessIdList[i];
     //                PPH_STRING fileName;
-
+    //
     //                if (processId == NtCurrentProcessId())
     //                    continue;
-
+    //
     //                if (NT_SUCCESS(status = PhGetProcessImageFileNameByProcessId(processId, &fileName)))
     //                {
     //                    if (PhEqualString(applicationFileName, fileName, TRUE))
     //                    {
     //                        PhForegroundPreviousInstance(processId);
     //                    }
-
+    //
     //                    PhDereferenceObject(fileName);
     //                }
     //            }
-
+    //
     //            PhFree(processIds);
     //        }
-
+    //
     //        NtClose(fileHandle);
     //    }
-
+    //
     //    PhDereferenceObject(applicationFileName);
     //}
 
     PhTraceFuncExit("Activate previous instance: %!STATUS!", status);
 }
 
+/**
+ * Initializes common controls and custom controls used by the application.
+ *
+ * This function registers standard Windows common controls and initializes
+ * custom controls such as tree views, graphs, hex editors, and color boxes.
+ * It must be called before creating windows that use these controls.
+ */
 VOID PhInitializeCommonControls(
     VOID
     )
@@ -601,12 +745,18 @@ VOID PhInitializeCommonControls(
 
     InitCommonControlsEx(&icex);
 
-    PhTreeNewInitialization();
-    PhGraphControlInitialization();
-    PhHexEditInitialization();
-    PhColorBoxInitialization();
+    PhTreeWindowAtom = PhTreeNewInitialization();
+    PhGraphWindowAtom = PhGraphControlInitialization();
+    PhHexEditWindowAtom = PhHexEditInitialization();
+    PhColorBoxWindowAtom = PhColorBoxInitialization();
 }
 
+/**
+ * Ensures the current working directory is set to the application's directory.
+ *
+ * This function checks if the process's current directory matches the application's
+ * directory. If not, it sets the current directory to the application's directory.
+ */
 NTSTATUS PhInitializeDirectoryPolicy(
     VOID
     )
@@ -639,7 +789,7 @@ NTSTATUS PhInitializeDirectoryPolicy(
     }
 
     PhDereferenceObject(applicationDirectory);
-    return TRUE;
+    return STATUS_SUCCESS;
 }
 
 #pragma region Error Reporting
@@ -653,6 +803,12 @@ typedef enum _PH_TRIAGE_DUMP_TYPE
     PhTriageDumpTypeFull,
 } PH_TRIAGE_DUMP_TYPE;
 
+/**
+ * Creates a crash dump file for an unhandled exception.
+ *
+ * \param ExceptionInfo Pointer to the exception information.
+ * \param DumpType The type of dump to create (minimal, normal, or full).
+ */
 VOID PhpCreateUnhandledExceptionCrashDump(
     _In_ PEXCEPTION_POINTERS ExceptionInfo,
     _In_ PH_TRIAGE_DUMP_TYPE DumpType
@@ -740,6 +896,17 @@ VOID PhpCreateUnhandledExceptionCrashDump(
     PhDereferenceObject(directory);
 }
 
+static LPTOP_LEVEL_EXCEPTION_FILTER PhpPreviousUnhandledExceptionFilter = NULL;
+
+/**
+ * Unhandled exception filter callback for System Informer.
+ *
+ * This function is called when an unhandled exception occurs. It presents the user
+ * with options to create a crash dump, restart, ignore, or exit. It also generates
+ * a crash dump file on the desktop if requested.
+ * \param ExceptionInfo Pointer to the exception information.
+ * \return An exception disposition value.
+ */
 LONG CALLBACK PhpUnhandledExceptionCallback(
     _In_ PEXCEPTION_POINTERS ExceptionInfo
     )
@@ -887,12 +1054,18 @@ LONG CALLBACK PhpUnhandledExceptionCallback(
         }
     }
 
-    PhExitApplication(ExceptionInfo->ExceptionRecord->ExceptionCode);
-
-    return EXCEPTION_EXECUTE_HANDLER;
+    return PhpPreviousUnhandledExceptionFilter(ExceptionInfo);
 }
 #pragma endregion
 
+/**
+ * Initializes the exception policy for the current process.
+ *
+ * This function configures the process error mode to suppress critical error dialogs
+ * and disables the Windows error reporting dialog for unhandled exceptions. It also
+ * installs a custom unhandled exception filter to handle application crashes, generate
+ * crash dumps, and present user-friendly dialogs or messages.
+ */
 NTSTATUS PhInitializeExceptionPolicy(
     VOID
     )
@@ -908,21 +1081,27 @@ NTSTATUS PhInitializeExceptionPolicy(
 #else
     PhSetProcessErrorMode(NtCurrentProcess(), 0);
 #endif
-    SetUnhandledExceptionFilter(PhpUnhandledExceptionCallback);
+    PhpPreviousUnhandledExceptionFilter = SetUnhandledExceptionFilter(PhpUnhandledExceptionCallback);
 
     return STATUS_SUCCESS;
 }
 
+/**
+ * Initializes the namespace policy for the current process.
+ *
+ * This function creates a named mutant object in the process's namespace to enforce
+ * single-instance behavior and activate previous instances of System Informer.
+ * \return NTSTATUS Successful or errant status.
+ */
 NTSTATUS PhInitializeNamespacePolicy(
     VOID
     )
 {
+    NTSTATUS status;
     HANDLE mutantHandle;
     SIZE_T returnLength;
     WCHAR formatBuffer[PH_INT64_STR_LEN_1];
-    OBJECT_ATTRIBUTES objectAttributes;
-    UNICODE_STRING objectNameUs;
-    PH_STRINGREF objectNameSr;
+    PH_STRINGREF objectName;
     PH_FORMAT format[2];
 
     PhInitFormatS(&format[0], L"SiMutant_");
@@ -939,30 +1118,158 @@ NTSTATUS PhInitializeNamespacePolicy(
         return STATUS_BUFFER_TOO_SMALL;
     }
 
-    objectNameSr.Length = returnLength - sizeof(UNICODE_NULL);
-    objectNameSr.Buffer = formatBuffer;
-
-    if (!PhStringRefToUnicodeString(&objectNameSr, &objectNameUs))
-        return STATUS_NAME_TOO_LONG;
-
-    InitializeObjectAttributes(
-        &objectAttributes,
-        &objectNameUs,
-        OBJ_CASE_INSENSITIVE,
-        PhGetNamespaceHandle(),
-        NULL
+    PhInitializeBufferStringRef(
+        &objectName,
+        formatBuffer,
+        returnLength - sizeof(UNICODE_NULL)
         );
 
-    NtCreateMutant(
+    status = PhCreateMutant(
         &mutantHandle,
         MUTANT_QUERY_STATE,
-        &objectAttributes,
+        PhGetNamespaceHandle(),
+        &objectName,
         TRUE
         );
+
+    return status;
+}
+
+/**
+ * Initializes the default COM options for the current process.
+ *
+ * If PH_COM_SVC is defined, it configures global COM options and sets a custom security descriptor
+ * that allows access to authenticated users, local system, and administrators. Otherwise, it simply
+ * initializes COM with apartment threading and disables OLE1 DDE.
+ */
+NTSTATUS PhInitializeComPolicy(
+    VOID
+    )
+{
+#ifdef PH_COM_SVC
+    #include <cguid.h>
+    NTSTATUS status;
+    IGlobalOptions* globalOptions;
+    UCHAR securityDescriptorBuffer[SECURITY_DESCRIPTOR_MIN_LENGTH + 0x300];
+    PSECURITY_DESCRIPTOR securityDescriptor = (PSECURITY_DESCRIPTOR)securityDescriptorBuffer;
+    PACL dacl = PTR_ADD_OFFSET(securityDescriptor, SECURITY_DESCRIPTOR_MIN_LENGTH);
+    PSID administratorsSid = PhSeAdministratorsSid();
+    ULONG daclLength;
+
+    if (!SUCCEEDED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)))
+        return STATUS_SUCCESS; // Continue without COM support. (dmex)
+
+    if (SUCCEEDED(PhGetClassObject(L"combase.dll", &CLSID_GlobalOptions, &IID_IGlobalOptions, &globalOptions)))
+    {
+        #define COMGLB_PROPERTIES_EXPLICIT_WINSTA_DESKTOP COMGLB_PROPERTIES_RESERVED1
+        #define COMGLB_PROCESS_MITIGATION_POLICY_BLOB COMGLB_PROPERTIES_RESERVED2
+        #define COMGLB_ENABLE_AGILE_OOP_PROXIES COMGLB_RESERVED1
+        #define COMGLB_ENABLE_WAKE_ON_RPC_SUPPRESSION COMGLB_RESERVED2
+        #define COMGLB_ADD_RESTRICTEDCODE_SID_TO_COM_CALLPERMISSIONS COMGLB_RESERVED3
+        #define HKLM_ONLY_CLASSIC_COM_CATALOG COMGLB_RESERVED5
+
+        if (SUCCEEDED(IGlobalOptions_Set(globalOptions, COMGLB_EXCEPTION_HANDLING, COMGLB_EXCEPTION_DONOT_HANDLE_ANY)) &&
+            SUCCEEDED(IGlobalOptions_Set(globalOptions, COMGLB_RO_SETTINGS, COMGLB_FAST_RUNDOWN | COMGLB_ENABLE_AGILE_OOP_PROXIES | HKLM_ONLY_CLASSIC_COM_CATALOG)))
+        {
+            // Successfully configured global COM options.
+        }
+
+        IGlobalOptions_Release(globalOptions);
+    }
+
+    if (!NT_SUCCESS(status = RtlULongAdd(SECURITY_DESCRIPTOR_MIN_LENGTH, sizeof(ACL), &daclLength)))
+        goto CleanupExit;
+    if (!NT_SUCCESS(status = RtlULongAdd(daclLength, UFIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + PhLengthSid(&PhSeAuthenticatedUserSid), &daclLength)))
+        goto CleanupExit;
+    if (!NT_SUCCESS(status = RtlULongAdd(daclLength, UFIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + PhLengthSid(&PhSeLocalSystemSid), &daclLength)))
+        goto CleanupExit;
+    if (!NT_SUCCESS(status = RtlULongAdd(daclLength, UFIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + PhLengthSid(administratorsSid), &daclLength)))
+        goto CleanupExit;
+
+    if (!NT_SUCCESS(status = PhCreateSecurityDescriptor(securityDescriptor, SECURITY_DESCRIPTOR_REVISION)))
+        goto CleanupExit;
+    if (!NT_SUCCESS(status = PhCreateAcl(dacl, daclLength - SECURITY_DESCRIPTOR_MIN_LENGTH, ACL_REVISION)))
+        goto CleanupExit;
+    if (!NT_SUCCESS(status = PhAddAccessAllowedAce(dacl, ACL_REVISION, FILE_READ_DATA | FILE_WRITE_DATA, &PhSeAuthenticatedUserSid)))
+        goto CleanupExit;
+    if (!NT_SUCCESS(status = PhAddAccessAllowedAce(dacl, ACL_REVISION, FILE_READ_DATA | FILE_WRITE_DATA, &PhSeLocalSystemSid)))
+        goto CleanupExit;
+    if (!NT_SUCCESS(status = PhAddAccessAllowedAce(dacl, ACL_REVISION, FILE_READ_DATA | FILE_WRITE_DATA, administratorsSid)))
+        goto CleanupExit;
+    if (!NT_SUCCESS(status = PhSetDaclSecurityDescriptor(securityDescriptor, TRUE, dacl, FALSE)))
+        goto CleanupExit;
+    if (!NT_SUCCESS(status = PhSetGroupSecurityDescriptor(securityDescriptor, administratorsSid, FALSE)))
+        goto CleanupExit;
+    if (!NT_SUCCESS(status = PhSetOwnerSecurityDescriptor(securityDescriptor, administratorsSid, FALSE)))
+        goto CleanupExit;
+
+    if (!SUCCEEDED(CoInitializeSecurity(
+        securityDescriptor,
+        UINT_MAX,
+        NULL,
+        NULL,
+        RPC_C_AUTHN_LEVEL_PKT_PRIVACY,
+        RPC_C_IMP_LEVEL_IDENTIFY,
+        NULL,
+        EOAC_NONE,
+        NULL
+        )))
+    {
+        goto CleanupExit;
+    }
+
+#ifdef DEBUG
+    assert(PhValidSecurityDescriptor(securityDescriptor));
+    assert(securityDescriptorAllocationLength < sizeof(securityDescriptorBuffer));
+    assert(PhLengthSecurityDescriptor(securityDescriptor) < sizeof(securityDescriptorBuffer));
+#endif
+CleanupExit:
+    return STATUS_SUCCESS;
+#else
+    if (!SUCCEEDED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)))
+        NOTHING;
+
+    return STATUS_SUCCESS;
+#endif
+}
+
+/**
+ * Initializes the execution policy for System Informer.
+ *
+ * This function checks if the Shift key is held down during startup. If so, it attempts
+ * to launch Task Manager (`taskmgr.exe`) instead of System Informer.
+ * This provides a quick way for users to access Task Manager if needed, for example,
+ * if System Informer is set as the default Task Manager replacement and the user
+ * wants to access the original Task Manager without changing settings.
+ * \return NTSTATUS Successful or errant status.
+ */
+NTSTATUS PhInitializeExecutionPolicy(
+    VOID
+    )
+{
+    // Note: GetAsyncKeyState queries the global keyboard bitmask without kernel transitions, blocking,
+    // handles, events or messages etc... The bitmask is also independent of any message loop or window.
+    // We can call it extremely early but only the high bit (0x8000) of the key state is valid without a message loop.
+
+    if (GetAsyncKeyState(VK_SHIFT) & 0x8000)
+    {
+        if (NT_SUCCESS(PhShellExecuteEx(NULL, L"taskmgr.exe", NULL, NULL, SW_SHOW, 0, 0, NULL)))
+        {
+            PhExitApplication(STATUS_SUCCESS);
+        }
+    }
 
     return STATUS_SUCCESS;
 }
 
+/**
+ * Initializes the mitigation policies for the current process.
+ *
+ * This function configures process-level mitigations to prevent crashes by third party software. *
+ * The function uses the Native API to set the mitigation policy. If the operating system does not
+ * support the required mitigation policies, the function performs no action and returns success.
+ * \return NTSTATUS Successful or errant status.
+ */
 NTSTATUS PhInitializeMitigationPolicy(
     VOID
     )
@@ -977,10 +1284,10 @@ NTSTATUS PhInitializeMitigationPolicy(
         //policyInfo.DynamicCodePolicy.ProhibitDynamicCode = TRUE;
         //NtSetInformationProcess(NtCurrentProcess(), ProcessMitigationPolicy, &policyInfo, sizeof(PROCESS_MITIGATION_POLICY_INFORMATION));
 
-        //policyInfo.Policy = ProcessExtensionPointDisablePolicy;
-        //policyInfo.ExtensionPointDisablePolicy.Flags = 0;
-        //policyInfo.ExtensionPointDisablePolicy.DisableExtensionPoints = TRUE;
-        //NtSetInformationProcess(NtCurrentProcess(), ProcessMitigationPolicy, &policyInfo, sizeof(PROCESS_MITIGATION_POLICY_INFORMATION));
+        policyInfo.Policy = ProcessExtensionPointDisablePolicy;
+        policyInfo.ExtensionPointDisablePolicy.Flags = 0;
+        policyInfo.ExtensionPointDisablePolicy.DisableExtensionPoints = TRUE;
+        NtSetInformationProcess(NtCurrentProcess(), ProcessMitigationPolicy, &policyInfo, sizeof(PROCESS_MITIGATION_POLICY_INFORMATION));
 
         policyInfo.Policy = ProcessSignaturePolicy;
         policyInfo.SignaturePolicy.Flags = 0;
@@ -996,85 +1303,91 @@ NTSTATUS PhInitializeMitigationPolicy(
     return STATUS_SUCCESS;
 }
 
-NTSTATUS PhInitializeComPolicy(
+/**
+ * Initializes a temporary desktop policy for process isolation or UI testing.
+ *
+ * This function creates a new random desktop, switches the current thread and input
+ * to that desktop, and launches a new instance of System Informer on it. After the
+ * child process exits, it restores the original desktop and cleans up resources.
+ *
+ * \remarks The function is typically used for scenarios where process isolation or UI testing
+ * is required on a separate desktop, such as security testing or debugging.
+ */
+VOID PhInitializeDesktopPolicy(
     VOID
     )
 {
-#ifdef PH_COM_SVC
-    #include <cguid.h>
-    IGlobalOptions* globalOptions;
-    UCHAR securityDescriptorBuffer[SECURITY_DESCRIPTOR_MIN_LENGTH + 0x300];
-    PSECURITY_DESCRIPTOR securityDescriptor = (PSECURITY_DESCRIPTOR)securityDescriptorBuffer;
-    PSID administratorsSid = PhSeAdministratorsSid();
-    ULONG securityDescriptorAllocationLength;
-    PACL dacl;
+    NTSTATUS status;
+    HDESK desktopHandle;
+    WCHAR alphastring[16] = L"";
 
-    if (!SUCCEEDED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)))
-        return TRUE; // Continue without COM support. (dmex)
+    PhGenerateRandomAlphaString(alphastring, RTL_NUMBER_OF(alphastring));
 
-    if (SUCCEEDED(PhGetClassObject(L"combase.dll", &CLSID_GlobalOptions, &IID_IGlobalOptions, &globalOptions)))
-    {
-        #define COMGLB_PROPERTIES_EXPLICIT_WINSTA_DESKTOP COMGLB_PROPERTIES_RESERVED1
-        #define COMGLB_PROCESS_MITIGATION_POLICY_BLOB COMGLB_PROPERTIES_RESERVED2
-        #define COMGLB_ENABLE_AGILE_OOP_PROXIES COMGLB_RESERVED1
-        #define COMGLB_ENABLE_WAKE_ON_RPC_SUPPRESSION COMGLB_RESERVED2
-        #define COMGLB_ADD_RESTRICTEDCODE_SID_TO_COM_CALLPERMISSIONS COMGLB_RESERVED3
-        #define HKLM_ONLY_CLASSIC_COM_CATALOG COMGLB_RESERVED5
-
-        IGlobalOptions_Set(globalOptions, COMGLB_EXCEPTION_HANDLING, COMGLB_EXCEPTION_DONOT_HANDLE_ANY);
-        IGlobalOptions_Set(globalOptions, COMGLB_RO_SETTINGS, COMGLB_FAST_RUNDOWN | COMGLB_ENABLE_AGILE_OOP_PROXIES | HKLM_ONLY_CLASSIC_COM_CATALOG);
-        IGlobalOptions_Release(globalOptions);
-    }
-
-    securityDescriptorAllocationLength = SECURITY_DESCRIPTOR_MIN_LENGTH +
-        (ULONG)sizeof(ACL) +
-        (ULONG)sizeof(ACCESS_ALLOWED_ACE) +
-        PhLengthSid(&PhSeAuthenticatedUserSid) +
-        (ULONG)sizeof(ACCESS_ALLOWED_ACE) +
-        PhLengthSid(&PhSeLocalSystemSid) +
-        (ULONG)sizeof(ACCESS_ALLOWED_ACE) +
-        PhLengthSid(&administratorsSid);
-
-    dacl = PTR_ADD_OFFSET(securityDescriptor, SECURITY_DESCRIPTOR_MIN_LENGTH);
-    PhCreateSecurityDescriptor(securityDescriptor, SECURITY_DESCRIPTOR_REVISION);
-    PhCreateAcl(dacl, securityDescriptorAllocationLength - SECURITY_DESCRIPTOR_MIN_LENGTH, ACL_REVISION);
-    PhAddAccessAllowedAce(dacl, ACL_REVISION, FILE_READ_DATA | FILE_WRITE_DATA, &PhSeAuthenticatedUserSid);
-    PhAddAccessAllowedAce(dacl, ACL_REVISION, FILE_READ_DATA | FILE_WRITE_DATA, &PhSeLocalSystemSid);
-    PhAddAccessAllowedAce(dacl, ACL_REVISION, FILE_READ_DATA | FILE_WRITE_DATA, administratorsSid);
-    PhSetDaclSecurityDescriptor(securityDescriptor, TRUE, dacl, FALSE);
-    PhSetGroupSecurityDescriptor(securityDescriptor, administratorsSid, FALSE);
-    PhSetOwnerSecurityDescriptor(securityDescriptor, administratorsSid, FALSE);
-
-    if (!SUCCEEDED(CoInitializeSecurity(
-        securityDescriptor,
-        UINT_MAX,
+    if (desktopHandle = CreateDesktop(
+        alphastring,
         NULL,
         NULL,
-        RPC_C_AUTHN_LEVEL_PKT_PRIVACY,
-        RPC_C_IMP_LEVEL_IDENTIFY,
-        NULL,
-        EOAC_NONE,
+        0,
+        DESKTOP_CREATEWINDOW,
         NULL
-        )))
+        ))
     {
-        NOTHING;
+        status = STATUS_SUCCESS;
+    }
+    else
+    {
+        status = PhGetLastWin32ErrorAsNtStatus();
     }
 
-#ifdef DEBUG
-    assert(RtlValidSecurityDescriptor(securityDescriptor));
-    assert(securityDescriptorAllocationLength < sizeof(securityDescriptorBuffer));
-    assert(RtlLengthSecurityDescriptor(securityDescriptor) < sizeof(securityDescriptorBuffer));
-#endif
+    if (NT_SUCCESS(status))
+    {
+        HANDLE processHandle;
+        HDESK processDesktop;
 
-    return TRUE;
-#else
-    if (!SUCCEEDED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)))
-        NOTHING;
+        processDesktop = GetThreadDesktop(HandleToUlong(NtCurrentThreadId()));
 
-    return STATUS_SUCCESS;
-#endif
+        SetThreadDesktop(desktopHandle);
+        SwitchDesktop(desktopHandle);
+
+        if (NT_SUCCESS(PhShellProcessHacker(
+            NULL,
+            NULL,
+            SW_SHOW,
+            PH_SHELL_EXECUTE_DEFAULT,
+            PH_SHELL_APP_PROPAGATE_PARAMETERS | PH_SHELL_APP_PROPAGATE_PARAMETERS_IGNORE_VISIBILITY,
+            0,
+            &processHandle
+            )))
+        {
+            PhWaitForSingleObject(processHandle, INFINITE);
+            NtClose(processHandle);
+        }
+
+        SwitchDesktop(processDesktop);
+        SetThreadDesktop(processDesktop);
+
+        CloseDesktop(desktopHandle);
+    }
+
+    if (!NT_SUCCESS(status))
+    {
+        PhShowStatus(NULL, L"Unable to initialize desktop policy.", status, 0);
+    }
+
+    PhExitApplication(status);
 }
 
+/**
+ * Enables or disables the process break-on-termination policy.
+ *
+ * This function configures the process to trigger a system critical break if it is terminated,
+ * based on the specified flag. When enabled, the process is protected from termination by
+ * non-privileged users, and the system will generate a critical error if the process is killed.
+ * This is typically used to prevent accidental or unauthorized termination of critical processes.
+ * The function only applies the policy if the current process is running with elevated privileges
+ * and the "Enable Break On Termination" setting is enabled.
+ * \param Enabled TRUE to enable the break-on-termination policy; FALSE to disable it.
+ */
 VOID PhEnableTerminationPolicy(
     _In_ BOOLEAN Enabled
     )
@@ -1100,6 +1413,12 @@ VOID PhEnableTerminationPolicy(
     }
 }
 
+/**
+ * Initializes the timer policy for the system.
+ *
+ * This function sets up and configures the timer policy that will be used
+ * throughout the System Informer application for timing operations and measurements.
+ */
 NTSTATUS PhInitializeTimerPolicy(
     VOID
     )
@@ -1111,6 +1430,13 @@ NTSTATUS PhInitializeTimerPolicy(
     return STATUS_SUCCESS;
 }
 
+/**
+ * Initializes the application system.
+ *
+ * This function performs the necessary initialization of the System Informer
+ * application system, setting up core components and resources required for
+ * the application to function properly.
+ */
 NTSTATUS PhInitializeAppSystem(
     VOID
     )
@@ -1127,6 +1453,13 @@ NTSTATUS PhInitializeAppSystem(
     return STATUS_SUCCESS;
 }
 
+/**
+ * Initializes the application settings.
+ *
+ * This function sets up and initializes all application-level settings,
+ * including user preferences, configuration values, and default parameters
+ * required for the System Informer application to function properly.
+ */
 VOID PhInitializeAppSettings(
     VOID
     )
@@ -1138,105 +1471,239 @@ VOID PhInitializeAppSettings(
     {
         // There are three possible locations for the settings file:
         // 1. The file name given in the command line.
-        // 2. A file named SystemInformer.exe.settings.xml in the program directory. (This changes
+        // 2. A file named SystemInformer.exe.settings.json in the program directory. (This changes
         //    based on the executable file name.)
         // 3. The default location.
+        NTSTATUS status = STATUS_OBJECT_NAME_NOT_FOUND;
+        PPH_STRING settingsPath = NULL;
+        PPH_STRING basePath = NULL;
 
         // 1. File specified in command line
         if (PhStartupParameters.SettingsFileName)
         {
-            PPH_STRING settingsFileName;
-
             if (PhDetermineDosPathNameType(&PhStartupParameters.SettingsFileName->sr) == RtlPathTypeRooted)
             {
                 PhSetReference(&PhSettingsFileName, PhStartupParameters.SettingsFileName);
             }
             else
             {
+                PPH_STRING settingsFileName;
+
                 // Get an absolute path now.
                 if (NT_SUCCESS(PhGetFullPath(PhGetString(PhStartupParameters.SettingsFileName), &settingsFileName, NULL)))
                 {
-                    PhMoveReference(&PhSettingsFileName, PhDosPathNameToNtPathName(&settingsFileName->sr));
-                    PhDereferenceObject(settingsFileName);
-                }
-            }
-        }
+                    PhMoveReference(&settingsFileName, PhDosPathNameToNtPathName(&settingsFileName->sr));
 
-        // 2. File in program directory
-        if (PhIsNullOrEmptyString(PhSettingsFileName))
-        {
-            PPH_STRING settingsFileName;
-
-            if (settingsFileName = PhGetApplicationFileNameZ(L".settings.xml"))
-            {
-                if (PhDoesFileExist(&settingsFileName->sr))
-                {
-                    PhMoveReference(&PhSettingsFileName, settingsFileName);
-                    PhPortableEnabled = TRUE;
-                }
-                else
-                {
-                    PhDereferenceObject(settingsFileName);
-                }
-            }
-        }
-
-        // 3. Default location
-        if (PhIsNullOrEmptyString(PhSettingsFileName))
-        {
-            PhSettingsFileName = PhGetKnownLocationZ(PH_FOLDERID_RoamingAppData, L"\\SystemInformer\\settings.xml", TRUE);
-        }
-
-        if (!PhIsNullOrEmptyString(PhSettingsFileName))
-        {
-            NTSTATUS status;
-
-            status = PhLoadSettings(&PhSettingsFileName->sr);
-
-            // If we didn't find the file, it will be created. Otherwise,
-            // there was probably a parsing error and we don't want to
-            // change anything.
-            if (status == STATUS_FILE_CORRUPT_ERROR)
-            {
-                if (PhShowMessage2(
-                    NULL,
-                    TD_YES_BUTTON | TD_NO_BUTTON,
-                    TD_WARNING_ICON,
-                    L"System Informer's settings file is corrupt. Do you want to reset it?",
-                    L"If you select No, the settings system will not function properly."
-                    ) == IDYES)
-                {
-                    HANDLE fileHandle;
-
-                    // This used to delete the file. But it's better to keep the file there
-                    // and overwrite it with some valid XML, especially with case (2) above.
-                    if (NT_SUCCESS(PhCreateFile(
-                        &fileHandle,
-                        &PhSettingsFileName->sr,
-                        FILE_GENERIC_WRITE,
-                        FILE_ATTRIBUTE_NORMAL,
-                        FILE_SHARE_READ | FILE_SHARE_DELETE,
-                        FILE_OVERWRITE,
-                        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT
-                        )))
+                    if (!PhIsNullOrEmptyString(settingsFileName))
                     {
-                        static CHAR dataXml[] = "<settings></settings>";
-                        PhWriteFile(fileHandle, dataXml, sizeof(dataXml) - 1, NULL, NULL);
-                        NtClose(fileHandle);
+                        PhMoveReference(&PhSettingsFileName, settingsFileName);
                     }
                 }
-                else
-                {
-                    // Pretend we don't have a settings store so bad things
-                    // don't happen.
-                    PhDereferenceObject(PhSettingsFileName);
-                    PhSettingsFileName = NULL;
-                }
             }
+
+            if (PhSettingsFileName)
+            {
+                status = PhLoadSettings(&PhSettingsFileName->sr);
+            }
+        }
+
+        // 2. Default locations (AppData)
+        if (PhIsNullOrEmptyString(PhSettingsFileName) || !NT_SUCCESS(status))
+        {
+            status = PhLoadSettingsAutoDetect(NULL, L"settings", &settingsPath, NULL, &PhPortableEnabled);
+
+            if (NT_SUCCESS(status) || status == STATUS_OBJECT_NAME_NOT_FOUND)
+            {
+                PhMoveReference(&PhSettingsFileName, settingsPath);
+            }
+        }
+
+        // Handle errors
+        if (status == STATUS_FILE_CORRUPT_ERROR)
+        {
+            if (PhShowMessage2(
+                NULL,
+                TD_YES_BUTTON | TD_NO_BUTTON,
+                TD_WARNING_ICON,
+                L"System Informer's settings file is corrupt. Do you want to reset it?",
+                L"If you select No, the settings system will not function properly."
+                ) == IDYES)
+            {
+                if (PhSettingsFileName)
+                    PhResetSettingsFile(&PhSettingsFileName->sr);
+            }
+            else
+            {
+                PhDereferenceObject(PhSettingsFileName);
+                PhSettingsFileName = NULL;
+            }
+        }
+        else if (!NT_SUCCESS(status) && status != STATUS_OBJECT_NAME_NOT_FOUND)
+        {
+            PhShowStatus(NULL, L"Unable to load the settings file.", status, 0);
         }
     }
 
     PhUpdateCachedSettings();
+
+    //PhSettingsInitialization();
+    //PhAddDefaultSettings();
+
+    //if (!PhStartupParameters.NoSettings)
+    //{
+    //    // There are three possible locations for the settings file:
+    //    // 1. The file name given in the command line.
+    //    // 2. A file named SystemInformer.exe.settings.json in the program directory. (This changes
+    //    //    based on the executable file name.)
+    //    // 3. The default location.
+
+    //    // 1. File specified in command line
+    //    if (PhStartupParameters.SettingsFileName)
+    //    {
+    //        if (PhDetermineDosPathNameType(&PhStartupParameters.SettingsFileName->sr) == RtlPathTypeRooted)
+    //        {
+    //            PhSetReference(&PhSettingsFileName, PhStartupParameters.SettingsFileName);
+    //        }
+    //        else
+    //        {
+    //            PPH_STRING settingsFileName;
+
+    //            // Get an absolute path now.
+    //            if (NT_SUCCESS(PhGetFullPath(PhGetString(PhStartupParameters.SettingsFileName), &settingsFileName, NULL)))
+    //            {
+    //                PhMoveReference(&settingsFileName, PhDosPathNameToNtPathName(&settingsFileName->sr));
+
+    //                if (!PhIsNullOrEmptyString(settingsFileName))
+    //                {
+    //                    PhMoveReference(&PhSettingsFileName, settingsFileName);
+    //                }
+    //            }
+    //        }
+    //    }
+
+    //    // 2. File in program directory (portable mode)
+    //    if (PhIsNullOrEmptyString(PhSettingsFileName))
+    //    {
+    //        PPH_STRING settingsFileName;
+
+    //        // Try .settings.json first
+    //        if (settingsFileName = PhGetApplicationFileNameZ(L".settings.json"))
+    //        {
+    //            if (PhDoesFileExist(&settingsFileName->sr))
+    //            {
+    //                PhMoveReference(&PhSettingsFileName, settingsFileName);
+    //                PhPortableEnabled = TRUE;
+    //            }
+    //            else
+    //            {
+    //                PhDereferenceObject(settingsFileName);
+
+    //                // Try .settings.xml (legacy)
+    //                if (settingsFileName = PhGetApplicationFileNameZ(L".settings.xml"))
+    //                {
+    //                    if (PhDoesFileExist(&settingsFileName->sr))
+    //                    {
+    //                        PPH_STRING jsonFileName = PhGetBaseNameChangeExtensionZ(&settingsFileName->sr, L".json");
+
+    //                        // Convert XML to JSON
+    //                        NTSTATUS convertStatus = PhConvertSettingsXmlToJson(
+    //                            &settingsFileName->sr,
+    //                            &jsonFileName->sr
+    //                            );
+
+    //                        if (NT_SUCCESS(convertStatus))
+    //                        {
+    //                            PhMoveReference(&PhSettingsFileName, jsonFileName);
+    //                            PhPortableEnabled = TRUE;
+    //                        }
+    //                        else
+    //                        {
+    //                            PhShowStatus(NULL, L"Unable to convert settings to json format.", convertStatus, 0);
+    //                            PhDereferenceObject(jsonFileName);
+    //                        }
+    //                    }
+    //                    else
+    //                    {
+    //                        PhDereferenceObject(settingsFileName);
+    //                    }
+    //                }
+    //            }
+    //        }
+    //    }
+
+    //    // 3. Default location
+    //    if (PhIsNullOrEmptyString(PhSettingsFileName))
+    //    {
+    //        PhSettingsFileName = PhGetKnownLocationZ(PH_FOLDERID_RoamingAppData, L"\\SystemInformer\\settings.json", TRUE);
+    //    }
+
+    //    if (!PhIsNullOrEmptyString(PhSettingsFileName))
+    //    {
+    //        NTSTATUS status;
+
+    //        status = PhLoadSettings(&PhSettingsFileName->sr);
+
+    //        // If JSON file not found, try to convert from XML
+    //        if (status == STATUS_OBJECT_NAME_NOT_FOUND)
+    //        {
+    //            PPH_STRING xmlFileName = PhGetBaseNameChangeExtensionZ(&PhSettingsFileName->sr, L".xml");
+
+    //            if (!PhIsNullOrEmptyString(xmlFileName))
+    //            {
+    //                if (PhDoesFileExist(&xmlFileName->sr))
+    //                {
+    //                    // Convert XML to JSON
+    //                    NTSTATUS convertStatus = PhConvertSettingsXmlToJson(
+    //                        &xmlFileName->sr,
+    //                        &PhSettingsFileName->sr
+    //                        );
+
+    //                    if (NT_SUCCESS(convertStatus))
+    //                    {
+    //                        // Retry loading from newly created JSON file
+    //                        status = PhLoadSettings(&PhSettingsFileName->sr);
+    //                    }
+    //                    else
+    //                    {
+    //                        PhShowStatus(NULL, L"Unable to convert settings to json format.", convertStatus, 0);
+    //                    }
+    //                }
+
+    //                PhDereferenceObject(xmlFileName);
+    //            }
+    //        }
+
+    //        // If we didn't find the file, it will be created. Otherwise,
+    //        // there was probably a parsing error and we don't want to
+    //        // change anything.
+    //        if (status == STATUS_FILE_CORRUPT_ERROR)
+    //        {
+    //            if (PhShowMessage2(
+    //                NULL,
+    //                TD_YES_BUTTON | TD_NO_BUTTON,
+    //                TD_WARNING_ICON,
+    //                L"System Informer's settings file is corrupt. Do you want to reset it?",
+    //                L"If you select No, the settings system will not function properly."
+    //                ) == IDYES)
+    //            {
+    //                PhResetSettingsFile(&PhSettingsFileName->sr);
+    //            }
+    //            else
+    //            {
+    //                // Pretend we don't have a settings file, the user can resolve the issue
+    //                // in this case without resetting the user(s) settings or customization to defaults.
+    //                PhDereferenceObject(PhSettingsFileName);
+    //                PhSettingsFileName = NULL;
+    //            }
+    //        }
+    //        else if (!NT_SUCCESS(status))
+    //        {
+    //            PhShowStatus(NULL, L"Unable to load the settings file.", status, 0);
+    //        }
+    //    }
+    //}
+
+    //PhUpdateCachedSettings();
 
     // Apply basic global settings.
     PhPluginsEnabled = !!PhGetIntegerSetting(SETTING_ENABLE_PLUGINS);
@@ -1246,6 +1713,7 @@ VOID PhInitializeAppSettings(
     for (ULONG i = 0; i < PhMaxPrecisionUnit; i++)
         PhMaxPrecisionLimit /= 10;
     PhEnableWindowText = !!PhGetIntegerSetting(SETTING_ENABLE_WINDOW_TEXT);
+    PhEnableHighResolution = WindowsVersion >= WINDOWS_11 && PhGetIntegerSetting(SETTING_ENABLE_HIGH_RESOLUTION);
 
     PhEnableThemeSupport = !!PhGetIntegerSetting(SETTING_ENABLE_THEME_SUPPORT);
     PhThemeWindowForegroundColor = PhGetIntegerSetting(SETTING_THEME_WINDOW_FOREGROUND_COLOR);
@@ -1276,6 +1744,27 @@ VOID PhInitializeAppSettings(
             sampleCount = 4096;
 
         PhSetIntegerSetting(SETTING_SAMPLE_COUNT, sampleCount);
+    }
+
+    {
+        PPH_STRING clientId = PhGetStringSetting(SETTING_CLIENT_ID);
+        if (PhIsNullOrEmptyString(clientId))
+        {
+            static const PH_STRINGREF trimSet = PH_STRINGREF_INIT(L"{}");
+            GUID guid;
+            PH_STRINGREF trimmed;
+
+            PhGenerateGuid(&guid);
+            PhMoveReference(&clientId, PhFormatGuid(&guid));
+
+            trimmed = clientId->sr;
+            PhTrimStringRef(&trimmed, &trimSet, 0);
+            PhLowerStringRef(&trimmed);
+
+            PhSetStringSetting2(SETTING_CLIENT_ID, &trimmed);
+        }
+
+        PhClearReference(&clientId);
     }
 
     if (PhStartupParameters.UpdateChannel != PhInvalidChannel)
@@ -1322,6 +1811,19 @@ typedef enum _PH_COMMAND_ARG
     PH_ARG_CHANNEL,
 } PH_COMMAND_ARG;
 
+/**
+ * Callback function for processing command line options.
+ *
+ * This function is invoked for each parsed command line option during application startup.
+ * It updates the global PhStartupParameters structure and related state based on the provided
+ * option and value. Supported options include settings file path, visibility, debug mode,
+ * privilege elevation, plugin parameters, process priority, and more.
+ *
+ * \param Option Pointer to the command line option structure, or NULL for non-option arguments.
+ * \param Value Optional value associated with the option, or NULL if not applicable.
+ * \param Context Optional context pointer (unused).
+ * \return TRUE to continue processing further options, or FALSE to stop.
+ */
 _Function_class_(PH_COMMAND_LINE_CALLBACK)
 BOOLEAN NTAPI PhpCommandLineOptionCallback(
     _In_opt_ PCPH_COMMAND_LINE_OPTION Option,
@@ -1354,11 +1856,33 @@ BOOLEAN NTAPI PhpCommandLineOptionCallback(
             PhStartupParameters.NoKph = TRUE;
             break;
         case PH_ARG_DEBUG:
-            PhStartupParameters.Debug = TRUE;
+            {
+                PH_STRINGREF inputHandleString;
+                PH_STRINGREF outputHandleString;
+                ULONG64 inputHandle;
+                ULONG64 outputHandle;
+
+                if (Value && PhSplitStringRefAtChar(&Value->sr, L',', &inputHandleString, &outputHandleString))
+                {
+                    if (
+                        PhStringToUInt64(&inputHandleString, 16, &inputHandle) &&
+                        PhStringToUInt64(&outputHandleString, 16, &outputHandle)
+                        )
+                    {
+                        PhStartupParameters.DebugConsoleInputHandle = (HANDLE)(ULONG_PTR)inputHandle;
+                        PhStartupParameters.DebugConsoleOutputHandle = (HANDLE)(ULONG_PTR)outputHandle;
+                        PhStartupParameters.Debug = TRUE;
+                    }
+                }
+            }
             break;
         case PH_ARG_HWND:
-            if (Value && PhStringToInteger64(&Value->sr, 16, &integer))
-                PhStartupParameters.WindowHandle = (HWND)(ULONG_PTR)integer;
+            {
+                if (Value && PhStringToUInt64(&Value->sr, 16, &integer))
+                {
+                    PhStartupParameters.WindowHandle = (HWND)(ULONG_PTR)integer;
+                }
+            }
             break;
         case PH_ARG_POINT:
             {
@@ -1400,24 +1924,32 @@ BOOLEAN NTAPI PhpCommandLineOptionCallback(
             PhStartupParameters.Help = TRUE;
             break;
         case PH_ARG_SELECTPID:
-            if (Value && PhStringToInteger64(&Value->sr, 0, &integer))
-                PhStartupParameters.SelectPid = (ULONG)integer;
+            {
+                if (Value && PhStringToUInt64(&Value->sr, 0, &integer))
+                {
+                    PhStartupParameters.SelectPid = (ULONG)integer;
+                }
+            }
             break;
         case PH_ARG_PRIORITY:
-            if (Value && PhEqualString2(Value, L"r", TRUE))
-                PhStartupParameters.PriorityClass = PROCESS_PRIORITY_CLASS_REALTIME;
-            else if (Value && PhEqualString2(Value, L"h", TRUE))
-                PhStartupParameters.PriorityClass = PROCESS_PRIORITY_CLASS_HIGH;
-            else if (Value && PhEqualString2(Value, L"n", TRUE))
-                PhStartupParameters.PriorityClass = PROCESS_PRIORITY_CLASS_NORMAL;
-            else if (Value && PhEqualString2(Value, L"l", TRUE))
-                PhStartupParameters.PriorityClass = PROCESS_PRIORITY_CLASS_IDLE;
+            {
+                if (Value && PhEqualString2(Value, L"r", TRUE))
+                    PhStartupParameters.PriorityClass = PROCESS_PRIORITY_CLASS_REALTIME;
+                else if (Value && PhEqualString2(Value, L"h", TRUE))
+                    PhStartupParameters.PriorityClass = PROCESS_PRIORITY_CLASS_HIGH;
+                else if (Value && PhEqualString2(Value, L"n", TRUE))
+                    PhStartupParameters.PriorityClass = PROCESS_PRIORITY_CLASS_NORMAL;
+                else if (Value && PhEqualString2(Value, L"l", TRUE))
+                    PhStartupParameters.PriorityClass = PROCESS_PRIORITY_CLASS_IDLE;
+            }
             break;
         case PH_ARG_PLUGIN:
-            if (!PhStartupParameters.PluginParameters)
-                PhStartupParameters.PluginParameters = PhCreateList(3);
-            if (Value)
-                PhAddItemList(PhStartupParameters.PluginParameters, PhReferenceObject(Value));
+            {
+                if (!PhStartupParameters.PluginParameters)
+                    PhStartupParameters.PluginParameters = PhCreateList(3);
+                if (Value)
+                    PhAddItemList(PhStartupParameters.PluginParameters, PhReferenceObject(Value));
+            }
             break;
         case PH_ARG_SELECTTAB:
             PhSwapReference(&PhStartupParameters.SelectTab, Value);
@@ -1468,6 +2000,13 @@ BOOLEAN NTAPI PhpCommandLineOptionCallback(
     return TRUE;
 }
 
+/**
+ * Parses and processes the application's startup parameters from the command line.
+ *
+ * This function defines and processes all supported command line options for System Informer.
+ * It updates the global PhStartupParameters structure based on the parsed arguments, enabling
+ * or disabling features, setting file paths, and configuring application behavior.
+ */
 VOID PhpProcessStartupParameters(
     VOID
     )
@@ -1480,7 +2019,7 @@ VOID PhpProcessStartupParameters(
         { PH_ARG_SHOWHIDDEN, L"hide", NoArgumentType },
         { PH_ARG_RUNASSERVICEMODE, L"ras", MandatoryArgumentType },
         { PH_ARG_NOKPH, L"nokph", NoArgumentType },
-        { PH_ARG_DEBUG, L"debug", NoArgumentType },
+        { PH_ARG_DEBUG, L"debug", MandatoryArgumentType },
         { PH_ARG_HWND, L"hwnd", MandatoryArgumentType },
         { PH_ARG_POINT, L"point", MandatoryArgumentType },
         { PH_ARG_SHOWOPTIONS, L"showoptions", NoArgumentType },
@@ -1551,14 +2090,16 @@ VOID PhpProcessStartupParameters(
             );
         PhExitApplication(STATUS_SUCCESS);
     }
-
-    if (PhStartupParameters.Debug)
-    {
-        // The symbol provider won't work if this is chosen.
-        PhShowDebugConsole();
-    }
 }
 
+/**
+ * Enables a set of privileges for the current process token.
+ *
+ * \remarks This function is called during application startup to ensure
+ * the process has the necessary rights for system-level operations.
+ * If the process lacks sufficient rights to adjust privileges, the function
+ * will silently fail and continue.
+ */
 VOID PhpEnablePrivileges(
     VOID
     )

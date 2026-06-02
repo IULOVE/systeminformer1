@@ -11,12 +11,25 @@
 
 namespace CustomBuildTool
 {
-    internal static unsafe class BuildVisualStudio
+    /// <summary>
+    /// Provides methods for discovering and managing installed Visual Studio instances using native setup configuration APIs.
+    /// </summary>
+    internal static class BuildVisualStudio
     {
+        /// <summary>
+        /// List of discovered Visual Studio instances on the system.
+        /// </summary>
         private static readonly List<VisualStudioInstance> VisualStudioInstanceList;
-        private static VisualStudioInstance VisualStudioInstance = null;
 
-        static BuildVisualStudio()
+        /// <summary>
+        /// The selected Visual Studio instance, typically the latest version with required dependencies.
+        /// </summary>
+        private static VisualStudioInstance VisualStudioInstance;
+
+        /// <summary>
+        /// Static constructor. Discovers all Visual Studio instances using the native setup configuration API and populates <see cref="VisualStudioInstanceList"/>.
+        /// </summary>
+        static unsafe BuildVisualStudio()
         {
             VisualStudioInstanceList = new List<VisualStudioInstance>();
 
@@ -80,7 +93,7 @@ namespace CustomBuildTool
                                 enumSetupInstances->Release(EnumSetupInstancesInterfacePtr);
                             }
 
-                            setupConfiguration->Release(SetupConfigurationInterfacePtr);
+                            setupConfiguration->Release(SetupConfiguration2InterfacePtr);
                         }
 
                         setupInterface->Release(SetupConfigurationInterfacePtr);
@@ -89,6 +102,25 @@ namespace CustomBuildTool
 
                 NativeLibrary.Free(baseAddress);
             }
+
+            // Environment Begin
+            bool isEnterpriseWdk = IsEnterpriseWdk();
+            string environmentVersion = EnvironmentVersion();
+
+            if (Win32.GetEnvironmentVariable("VSINSTALLDIR", out string vsInstallDir) && Directory.Exists(vsInstallDir))
+            {
+                VisualStudioInstanceList.Add(new VisualStudioInstance(isEnterpriseWdk ? "Enterprise WDK" : "Visual Studio (Environment)", vsInstallDir, environmentVersion));
+            }
+            else if (Win32.GetEnvironmentVariable("VCINSTALLDIR", out string vcInstallDir))
+            {
+                string vsPath = Path.GetFullPath(Path.Join([vcInstallDir, "..\\..\\"]));
+
+                if (Directory.Exists(vsPath))
+                {
+                    VisualStudioInstanceList.Add(new VisualStudioInstance(isEnterpriseWdk ? "Enterprise WDK" : "Visual Studio (Environment)", vsPath, environmentVersion));
+                }
+            }
+            // Environment End
 
             VisualStudioInstanceList.Sort((p1, p2) =>
             {
@@ -106,6 +138,41 @@ namespace CustomBuildTool
             });
         }
 
+        public static bool IsEnterpriseWdk()
+        {
+            if (Win32.GetEnvironmentVariable("EnterpriseWDK", out string enterpriseWdk))
+            {
+                if (enterpriseWdk.Equals("true", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public static string EnvironmentVersion()
+        {
+            string environmentVersion = "17.0";
+
+            if (Win32.GetEnvironmentVariable("EWDKVisualStudioVersion", out string ewdkVisualStudioVersion) && !string.IsNullOrWhiteSpace(ewdkVisualStudioVersion))
+            {
+                environmentVersion = ewdkVisualStudioVersion.Trim();
+            }
+            else if (Win32.GetEnvironmentVariable("VisualStudioVersion", out string visualStudioVersion) && !string.IsNullOrWhiteSpace(visualStudioVersion))
+            {
+                environmentVersion = visualStudioVersion.Trim();
+            }
+
+            return environmentVersion;
+        }
+
+        /// <summary>
+        /// Gets the preferred Visual Studio instance, typically the latest version with required dependencies.
+        /// </summary>
+        /// <returns>
+        /// The selected <see cref="VisualStudioInstance"/> or <c>null</c> if none are available.
+        /// </returns>
         public static VisualStudioInstance GetVisualStudioInstance()
         {
             if (VisualStudioInstance == null && VisualStudioInstanceList != null)
@@ -127,52 +194,402 @@ namespace CustomBuildTool
             return VisualStudioInstance;
         }
 
-        //private static readonly Guid IID_ISetupConfiguration = new Guid("42843719-DB4C-46C2-8E7C-64F1816EFD5B");
+        /// <summary>
+        /// GUID for the ISetupConfiguration2 COM interface.
+        /// </summary>
         private static readonly Guid IID_ISetupConfiguration2 = new Guid("26AAB78C-4A60-49D6-AF3B-3C35BC93365D");
+
+        /// <summary>
+        /// GUID for the ISetupInstance2 COM interface.
+        /// </summary>
+        private static readonly Guid IID_ISetupInstance2 = new Guid("89143C9A-05AF-49B0-B717-72E218A2185C");
+
+        //private static readonly Guid IID_ISetupConfiguration = new Guid("42843719-DB4C-46C2-8E7C-64F1816EFD5B");
         //private static readonly Guid IID_IEnumSetupInstances = new Guid("6380BCFF-41D3-4B2E-8B2E-BF8A6810C848");
         //private static readonly Guid IID_ISetupInstance = new Guid("B41463C3-8866-43B5-BC33-2B0676F7F42E");
-        private static readonly Guid IID_ISetupInstance2 = new Guid("89143C9A-05AF-49B0-B717-72E218A2185C");
         //private static readonly Guid IID_ISetupPackageReference = new Guid("DA8D8A16-B2B6-4487-A2F1-594CCCCD6BF5");
         //private static readonly Guid IID_ISetupHelper = new Guid("42B21B78-6192-463E-87BF-D577838F1D5C");
 
         private static string GetLibraryPath()
         {
-            string path;
+            string path = null;
 
-            // HKEY_LOCAL_MACHINE\SOFTWARE\Classes\CLSID\{177F0C4A-1CD3-4DE7-A32C-71DBBB9FA36D}\InprocServer32
-            if (Environment.Is64BitProcess)
-                path = "C:\\ProgramData\\Microsoft\\VisualStudio\\Setup\\x64\\Microsoft.VisualStudio.Setup.Configuration.Native.dll";
-            else
-                path = "C:\\ProgramData\\Microsoft\\VisualStudio\\Setup\\x86\\Microsoft.VisualStudio.Setup.Configuration.Native.dll";
-
-            if (!File.Exists(path))
+            if (Win32.GetEnvironmentVariable("ProgramData", out string programData))
             {
-                if (Environment.Is64BitProcess)
-                    path = "C:\\ProgramData\\Microsoft\\VisualStudio\\Setup\\x64\\Microsoft.VisualStudio.Setup.Configuration.NativeMethods.dll";
-                else
-                    path = "C:\\ProgramData\\Microsoft\\VisualStudio\\Setup\\x86\\Microsoft.VisualStudio.Setup.Configuration.NativeMethods.dll";
+                string directory = Environment.Is64BitProcess ? "x64" : "x86";
+
+                path = Path.Join([programData, @"\Microsoft\VisualStudio\Setup\", directory, @"\Microsoft.VisualStudio.Setup.Configuration.Native.dll"]);
             }
+
+            //if (!File.Exists(path))
+            //{
+            //    string directory = Environment.Is64BitProcess ? "x64" : "x86";
+            //    path = Path.Join([programData, @"\Microsoft\VisualStudio\Setup\", directory, @"\Microsoft.VisualStudio.Setup.Configuration.NativeMethods.dll"]);
+            //}
 
             return path;
         }
+
+        internal static unsafe string BStrToStringAndFree(IntPtr Value)
+        {
+            if (Value == IntPtr.Zero)
+                return null;
+
+            try
+            {
+                uint byteLength = *(uint*)((byte*)Value - sizeof(uint));
+
+                if (byteLength == 0)
+                    return string.Empty;
+
+                ReadOnlySpan<char> valueSpan = new ReadOnlySpan<char>((char*)Value, (int)(byteLength / sizeof(char)));
+                return valueSpan.ToString();
+            }
+            finally
+            {
+                Marshal.FreeBSTR(Value);
+            }
+        }
+
+        /// <summary>
+        /// Required workloads for Visual Studio.
+        /// </summary>
+        private static readonly FrozenSet<string> RequiredWorkloads = new[]
+        {
+            "Microsoft.VisualStudio.Workload.NativeDesktop"
+        }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Required components for Visual Studio.
+        /// </summary>
+        private static readonly FrozenSet<string> RequiredComponents = new[]
+        {
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "Microsoft.VisualStudio.Component.VC.Tools.ARM64",
+            "Microsoft.VisualStudio.Component.Windows11SDK.26100",
+            "Microsoft.VisualStudio.Component.Windows10SDK",
+            "Component.Microsoft.Windows.DriverKit",
+            "Microsoft.Component.MSBuild",
+            "Microsoft.VisualStudio.Component.VC.ATL",
+            "Microsoft.VisualStudio.Component.VC.ATLMFC",
+            "Microsoft.VisualStudio.Component.VC.Redist.14.Latest",
+            "Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre",
+            "Microsoft.VisualStudio.Component.VC.Runtimes.ARM64.Spectre",
+            "Microsoft.VisualStudio.Component.VC.Runtimes.ARM64EC.Spectre",
+            "Microsoft.VisualStudio.Component.NuGet",
+            "Microsoft.VisualStudio.Component.Git"
+        }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Recommended components for Visual Studio.
+        /// </summary>
+        private static readonly FrozenSet<string> RecommendedComponents = new[]
+        {
+            "Microsoft.VisualStudio.Component.VC.CMake.Project",
+            "Microsoft.VisualStudio.Component.VC.14.45.17.12.CLI.Support"
+        }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Checks whether all required build dependencies are installed and available on the system.
+        /// </summary>
+        /// <param name="Quiet">Specifies whether to suppress console output during the check.</param>
+        /// <returns>
+        /// <c>true</c> if all dependencies are found; otherwise, <c>false</c>.
+        /// </returns>
+        public static bool CheckBuildDependencies(bool Quiet = false)
+        {
+            bool result = true;
+
+            try
+            {
+                if (GetVisualStudioInstance() != null)
+                {
+                    if (!Quiet)
+                        Program.PrintColorMessage($"\u2705 - {VisualStudioInstance.DisplayName} - {VisualStudioInstance.InstallationVersion}", ConsoleColor.Green);
+                }
+                else
+                {
+                    result = false;
+                    if (!Quiet)
+                        Program.PrintColorMessage("\u274C - Visual Studio - Not found", ConsoleColor.Yellow);
+                }
+
+                if (Win32.IsGitInstalled())
+                {
+                    if (!Quiet)
+                        Program.PrintColorMessage("\u2705 - Git - Installed", ConsoleColor.Green);
+                }
+                else
+                {
+                    result = false;
+                    if (!Quiet)
+                        Program.PrintColorMessage("\u274C - Git - Not found", ConsoleColor.Yellow);
+                }
+
+                string dotnet = Win32.GetDotNetPath();
+                if (!string.IsNullOrWhiteSpace(dotnet))
+                {
+                    string version = Win32.GetDotNetVersion();
+                    if (!Quiet)
+                        Program.PrintColorMessage($"\u2705 - DotNET - {version.Trim()}", ConsoleColor.Green);
+                }
+                else
+                {
+                    if (!Quiet)
+                        Program.PrintColorMessage("\u274C - DotNET - Not found", ConsoleColor.Yellow);
+                }
+            }
+            catch
+            {
+                if (!Quiet)
+                    Program.PrintColorMessage("\u274C - DotNET - Not found", ConsoleColor.Yellow);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Installs required Visual Studio build dependencies and components for the current environment.
+        /// </summary>
+        /// <remarks>The method downloads the Visual Studio Community installer if it is not already
+        /// present, then installs required workloads and components. A restart may be required to complete
+        /// installation. The method returns <see langword="false"/> if the installer download or installation
+        /// fails.</remarks>
+        /// <param name="Minimal">Specifies whether to install only the minimal set of required components. If <see langword="true"/>,
+        /// recommended components are excluded; otherwise, all recommended components are installed.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result is <see langword="true"/> if the
+        /// installation completes successfully; otherwise, <see langword="false"/>.</returns>
+        public static async Task<bool> InstallBuildDependencies(bool Minimal = false)
+        {
+            string installerPath = Path.Combine(Path.GetTempPath(), "vs_community.exe");
+
+            try
+            {
+                if (!File.Exists(installerPath))
+                {
+                    Program.PrintColorMessage("Downloading Visual Studio 2022 Community installer...", ConsoleColor.Cyan);
+
+                    using var client = BuildHttpClient.CreateHttpClient();
+                    using var request = new HttpRequestMessage(HttpMethod.Get, "https://aka.ms/vs/17/release/vs_community.exe");
+                    using var response = await BuildHttpClient.SendMessageResponse(client, request);
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        await using var fs = new FileStream(installerPath, FileMode.Create);
+                        await response.Content.CopyToAsync(fs);
+                    }
+                }
+
+                if (!File.Exists(installerPath))
+                {
+                    Program.PrintColorMessage("Failed to download Visual Studio installer.", ConsoleColor.Red);
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Program.PrintColorMessage($"Failed to download Visual Studio installer: {ex}", ConsoleColor.Red);
+                return false;
+            }
+
+            var args = new List<string>
+            {
+                "--passive",
+                "--wait",
+                "--norestart"
+            };
+
+            foreach (var w in RequiredWorkloads)
+            {
+                args.Add("--add");
+                args.Add(w);
+            }
+
+            foreach (var c in RequiredComponents)
+            {
+                args.Add("--add");
+                args.Add(c);
+            }
+
+            if (!Minimal)
+            {
+                foreach (var c in RecommendedComponents)
+                {
+                    args.Add("--add");
+                    args.Add(c);
+                }
+            }
+
+            args.Add("--add");
+            args.Add("Microsoft.NetCore.Component.Runtime.10.0");
+
+            Program.PrintColorMessage($"Installing Visual Studio components... {string.Join(' ', args)}", ConsoleColor.Cyan);
+
+            int exitCode = Win32.CreateProcess(installerPath, args, out _, false, false);
+
+            if (exitCode == 0 || exitCode == 3010)
+            {
+                Program.PrintColorMessage("Visual Studio installation completed successfully.", ConsoleColor.Green);
+                if (exitCode == 3010)
+                    Program.PrintColorMessage("A restart is required to complete installation.", ConsoleColor.Yellow);
+                return true;
+            }
+            else
+            {
+                if (exitCode == 8006)
+                {
+                    Program.PrintColorMessage("The Visual Studio installation failed because it attempted to install or modify workloads while Visual Studio (or related processes) are open.", ConsoleColor.Red);
+                }
+                else
+                {
+                    Program.PrintColorMessage($"Visual Studio installation failed with exit code: {exitCode}", ConsoleColor.Red);
+                }
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Gets the latest Windows SDK BuildTools package version from NuGet.
+        /// </summary>
+        /// <returns>
+        /// Latest stable version if available, otherwise latest version (including prerelease), or <c>string.Empty</c> on failure.
+        /// </returns>
+        public static string GetLatestWindowsSdkNuGetVersion()
+        {
+            return NugetMetadataClient.GetLatestVersion("Microsoft.Windows.SDK.CPP").GetAwaiter().GetResult();
+            //return NugetMetadataClient.GetLatestVersion("Microsoft.Windows.SDK.CPP.x64").GetAwaiter().GetResult();
+            //return NugetMetadataClient.GetLatestVersion("Microsoft.Windows.SDK.CPP.x64").GetAwaiter().GetResult();
+        }
+
+        public static string GetLatestBuildToolsNuGetVersion()
+        {
+            return NugetMetadataClient.GetLatestVersion("Microsoft.Windows.SDK.BuildTools").GetAwaiter().GetResult();
+        }
+
+        public static string GetLatestWindowsWdkNuGetVersion()
+        {
+            return NugetMetadataClient.GetLatestVersion("Microsoft.Windows.WDK.x64").GetAwaiter().GetResult();
+        }
     }
 
+    /// <summary>
+    /// Represents a single Visual Studio instance and its installed packages.
+    /// </summary>
     internal unsafe class VisualStudioInstance : IComparable, IComparable<VisualStudioInstance>
     {
+        /// <summary>
+        /// Gets the display name of the Visual Studio instance.
+        /// </summary>
         public string DisplayName { get; }
+
+        /// <summary>
+        /// Gets the internal name of the Visual Studio instance.
+        /// </summary>
         public string Name { get; }
+
+        /// <summary>
+        /// Gets the installation path of the Visual Studio instance.
+        /// </summary>
         public string Path { get; }
+
+        /// <summary>
+        /// Gets the installation version string of the Visual Studio instance.
+        /// </summary>
         public string InstallationVersion { get; }
-        //public string InstanceId { get; }
+
+        /// <summary>
+        /// Gets the instance identifier of the Visual Studio instance.
+        /// </summary>
+        public string InstanceId { get; }
+
+        /// <summary>
+        /// Gets the state flags of the Visual Studio instance.
+        /// </summary>
         public uint State { get; }
+
+        /// <summary>
+        /// Gets the list of installed packages for this Visual Studio instance.
+        /// </summary>
         public List<VisualStudioPackage> Packages { get; }
+
+        /// <summary>
+        /// Gets a value indicating whether the instance has ARM64 build tools components installed.
+        /// </summary>
         public bool HasARM64BuildToolsComponents { get; }
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="VisualStudioInstance"/> class.
+        /// </summary>
         public VisualStudioInstance()
         {
             this.Packages = new List<VisualStudioPackage>();
         }
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="VisualStudioInstance"/> class with manual parameters.
+        /// </summary>
+        /// <param name="Name">Display name.</param>
+        /// <param name="Path">Installation path.</param>
+        /// <param name="Version">Installation version.</param>
+        public VisualStudioInstance(string Name, string Path, string Version)
+        {
+            this.Name = Name;
+            this.DisplayName = Name;
+            this.Path = Path;
+            this.InstallationVersion = Version;
+            this.Packages = new List<VisualStudioPackage>();
+            this.HasARM64BuildToolsComponents = ProbeArm64BuildTools(Path);
+        }
+
+        /// <summary>
+        /// Probes whether ARM64-targeting cl.exe is available beneath a manual/ESDK instance path.
+        /// EWDK exposes the launched arch via the Platform env var; honor it directly to avoid a
+        /// directory enumeration on every cold start.
+        /// </summary>
+        private static bool ProbeArm64BuildTools(string InstallPath)
+        {
+            if (BuildVisualStudio.IsEnterpriseWdk())
+            {
+                if (Win32.GetEnvironmentVariable("Platform", out string platform) &&
+                    platform.Equals("arm64", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(InstallPath))
+                return false;
+
+            string msvcRoot = System.IO.Path.Combine(InstallPath, @"VC\Tools\MSVC");
+            if (!Directory.Exists(msvcRoot))
+                return false;
+
+            try
+            {
+                foreach (string clPath in Directory.EnumerateFiles(msvcRoot, "cl.exe", SearchOption.AllDirectories))
+                {
+                    if (clPath.Contains(@"\Hostarm64\arm64\", StringComparison.OrdinalIgnoreCase) ||
+                        clPath.Contains(@"\Hostx64\arm64\", StringComparison.OrdinalIgnoreCase) ||
+                        clPath.Contains(@"\Hostx86\arm64\", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+                // ignored
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="VisualStudioInstance"/> class from a native setup instance pointer.
+        /// </summary>
+        /// <param name="FromInstance">Pointer to the native ISetupInstance2 vtable.</param>
+        /// <param name="SetupInstancePtr">Pointer to the native setup instance.</param>
         public VisualStudioInstance(ISetupInstance2VTable* FromInstance, IntPtr SetupInstancePtr)
         {
             IntPtr NamePtr;
@@ -190,22 +607,22 @@ namespace CustomBuildTool
 
             if (FromInstance->GetInstallationName(SetupInstancePtr, &NamePtr).Succeeded && NamePtr != IntPtr.Zero)
             {
-                this.Name = Marshal.PtrToStringBSTR(NamePtr);
+                this.Name = BuildVisualStudio.BStrToStringAndFree(NamePtr);
             }
 
             if (FromInstance->GetInstallationPath(SetupInstancePtr, &PathPtr).Succeeded && PathPtr != IntPtr.Zero)
             {
-                this.Path = Marshal.PtrToStringBSTR(PathPtr);
+                this.Path = BuildVisualStudio.BStrToStringAndFree(PathPtr);
             }
 
             if (FromInstance->GetInstallationVersion(SetupInstancePtr, &VersionPtr).Succeeded && VersionPtr != IntPtr.Zero)
             {
-                this.InstallationVersion = Marshal.PtrToStringBSTR(VersionPtr);
+                this.InstallationVersion = BuildVisualStudio.BStrToStringAndFree(VersionPtr);
             }
 
             if (FromInstance->GetDisplayName(SetupInstancePtr, 0, &DisplayNamePtr).Succeeded && DisplayNamePtr != IntPtr.Zero)
             {
-                this.DisplayName = Marshal.PtrToStringBSTR(DisplayNamePtr);
+                this.DisplayName = BuildVisualStudio.BStrToStringAndFree(DisplayNamePtr);
             }
 
             if (FromInstance->GetState(SetupInstancePtr, &SetupPackageState).Succeeded)
@@ -217,43 +634,57 @@ namespace CustomBuildTool
 
             if (FromInstance->GetPackages(SetupInstancePtr, &SetupPackagesArrayPtr).Succeeded)
             {
-                if (PInvoke.SafeArrayGetLBound(SetupPackagesArrayPtr, 1, out var lbound).Succeeded &&
-                    PInvoke.SafeArrayGetUBound(SetupPackagesArrayPtr, 1, out var ubound).Succeeded)
+                try
                 {
-                    var count = ubound - lbound + 1;
-
-                    for (int i = 0; i < count; i++)
+                    if (PInvoke.SafeArrayGetLBound(SetupPackagesArrayPtr, 1, out var lbound).Succeeded &&
+                        PInvoke.SafeArrayGetUBound(SetupPackagesArrayPtr, 1, out var ubound).Succeeded)
                     {
-                        if (PInvoke.SafeArrayGetElement(
-                            SetupPackagesArrayPtr,
-                            &i,
-                            &SetupPackagePtr
-                            ).Succeeded)
+                        var count = ubound - lbound + 1;
+
+                        for (int i = 0; i < count; i++)
                         {
-                            var package = *(ISetupPackageReferenceVTable**)SetupPackagePtr;
+                            int index = lbound + i;
 
-                            this.Packages.Add(new VisualStudioPackage(package, SetupPackagePtr));
+                            if (PInvoke.SafeArrayGetElement(
+                                SetupPackagesArrayPtr,
+                                &index,
+                                &SetupPackagePtr
+                                ).Succeeded)
+                            {
+                                var package = *(ISetupPackageReferenceVTable**)SetupPackagePtr;
 
-                            package->Release(SetupPackagePtr);
+                                this.Packages.Add(new VisualStudioPackage(package, SetupPackagePtr));
+
+                                package->Release(SetupPackagePtr);
+                            }
                         }
                     }
+                }
+                finally
+                {
+                    PInvoke.SafeArrayDestroy(SetupPackagesArrayPtr);
                 }
             }
 
             // https://learn.microsoft.com/en-us/visualstudio/install/workload-component-id-vs-community
 
-            var found = this.Packages.FindAll(p => 
+            var found = this.Packages.FindAll(p =>
                 p.Id.Equals("Microsoft.VisualStudio.Component.VC.Tools.ARM64", StringComparison.OrdinalIgnoreCase) ||
                 p.Id.Equals("Microsoft.VisualStudio.Component.VC.Runtimes.ARM64.Spectre", StringComparison.OrdinalIgnoreCase));
 
             this.HasARM64BuildToolsComponents = found.Count >= 2;
         }
 
+        /// <summary>
+        /// Gets the latest installed Windows SDK package for this Visual Studio instance.
+        /// </summary>
+        /// <returns>
+        /// The <see cref="VisualStudioPackage"/> representing the latest Windows SDK, or <c>null</c> if none found.
+        /// </returns>
         private VisualStudioPackage GetLatestSdkPackage()
         {
-            var found = this.Packages.FindAll(p => p.Id.StartsWith("Microsoft.VisualStudio.Component.Windows10SDK", StringComparison.OrdinalIgnoreCase) ||
-                                                   p.Id.StartsWith("Microsoft.VisualStudio.Component.Windows11SDK", StringComparison.OrdinalIgnoreCase));
-        
+            var found = this.Packages.FindAll(p => p.Id.StartsWith("Microsoft.VisualStudio.Component.Windows11SDK", StringComparison.OrdinalIgnoreCase));
+
             if (found.Count == 0)
                 return null;
 
@@ -264,10 +695,10 @@ namespace CustomBuildTool
                 else
                     return 1;
             });
-        
+
             return found[^1];
         }
-        
+
         //public string GetWindowsSdkVersion()
         //{
         //    List<string> versions = new List<string>();
@@ -284,18 +715,15 @@ namespace CustomBuildTool
         //
         //    foreach (var sdk in found)
         //    {
-        //        string[] tokens = sdk.Id.Split(".", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        //
-        //        foreach (string name in tokens)
+        //        foreach (var name in sdk.Id.AsSpan().Split('.'))
         //        {
-        //            if (uint.TryParse(name, out uint version))
+        //            if (uint.TryParse(sdk.Id.AsSpan(name), out uint version))
         //            {
-        //                versions.Add(name);
+        //                versions.Add(sdk.Id.AsSpan(name).ToString());
         //                break;
         //            }
         //        }
-        //    }
-        //
+        //    }        //
         //    versions.Sort((p1, p2) =>
         //    {
         //        if (Version.TryParse(p1, out Version v1) && Version.TryParse(p2, out Version v2))
@@ -314,11 +742,83 @@ namespace CustomBuildTool
         //    }
         //}
         //
+
+        /// <summary>
+        /// Gets the full version string of the latest installed Windows SDK package.
+        /// </summary>
+        /// <returns>
+        /// The version string of the latest Windows SDK package, or <c>string.Empty</c> if none found.
+        /// </returns>
         public string GetWindowsSdkFullVersion()
         {
             VisualStudioPackage package = GetLatestSdkPackage();
 
             return package == null ? string.Empty : package.Version;
+        }
+
+        /// <summary>
+        /// Gets the Enterprise WDK version from version.txt or Visual Studio metadata.
+        /// </summary>
+        /// <returns>
+        /// The version string, or <c>string.Empty</c> if it cannot be determined.
+        /// </returns>
+        public string GetProductVersion()
+        {
+            try
+            {
+                if (BuildVisualStudio.IsEnterpriseWdk())
+                {
+                    // EWDK's version.txt sits at the extraction root, not the drive root.
+                    // Walk up from VSINSTALLDIR until version.txt is found.
+                    string dir = this.Path;
+
+                    while (!string.IsNullOrEmpty(dir))
+                    {
+                        string versionFilePath = System.IO.Path.Combine(dir, "version.txt");
+
+                        if (File.Exists(versionFilePath))
+                        {
+                            string versionText = File.ReadAllText(versionFilePath).Trim();
+
+                            if (!string.IsNullOrWhiteSpace(versionText))
+                            {
+                                if (versionText.StartsWith("Version ", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    versionText = versionText.Substring("Version ".Length);
+                                }
+                                return versionText;
+                            }
+                        }
+
+                        string parent = System.IO.Path.GetDirectoryName(dir);
+                        if (string.IsNullOrEmpty(parent) || parent.Equals(dir, StringComparison.OrdinalIgnoreCase))
+                            break;
+                        dir = parent;
+                    }
+                }
+
+                string devenvPath = System.IO.Path.Combine(this.Path, "Common7\\IDE\\devenv.exe");
+
+                if (File.Exists(devenvPath))
+                {
+                    FileVersionInfo versionInfo = FileVersionInfo.GetVersionInfo(devenvPath);
+                    return versionInfo.ProductVersion ?? string.Empty;
+                }
+
+                string msbuildPath = System.IO.Path.Combine(this.Path, "MSBuild\\Current\\Bin\\amd64\\MSBuild.exe");
+
+                if (File.Exists(msbuildPath))
+                {
+                    FileVersionInfo versionInfo = FileVersionInfo.GetVersionInfo(msbuildPath);
+                    return versionInfo.ProductVersion ?? string.Empty;
+                }
+            }
+            catch
+            {
+
+            }
+
+            return string.Empty;
         }
 
         //public bool HasRequiredDependency
@@ -370,68 +870,119 @@ namespace CustomBuildTool
         //    }
         //}
 
+        /// <summary>
+        /// Returns the internal name of the Visual Studio instance.
+        /// </summary>
+        /// <returns>The internal name.</returns>
         public override string ToString()
         {
             return this.Name;
         }
 
-        public int CompareTo(object obj)
+        /// <summary>
+        /// Compares this instance to another object by name.
+        /// </summary>
+        /// <param name="Obj">The object to compare to.</param>
+        /// <returns>
+        /// A value indicating the relative order of the instances.
+        /// </returns>
+        public int CompareTo(object Obj)
         {
-            if (obj == null)
+            if (Obj == null)
                 return 1;
 
-            if (obj is VisualStudioInstance instance)
+            if (Obj is VisualStudioInstance instance)
                 return string.Compare(this.Name, instance.Name, StringComparison.OrdinalIgnoreCase);
             else
                 return 1;
         }
 
-        public int CompareTo(VisualStudioInstance obj)
+        /// <summary>
+        /// Compares this instance to another <see cref="VisualStudioInstance"/> by name.
+        /// </summary>
+        /// <param name="Obj">The instance to compare to.</param>
+        /// <returns>
+        /// A value indicating the relative order of the instances.
+        /// </returns>
+        public int CompareTo(VisualStudioInstance Obj)
         {
-            if (obj == null)
+            if (Obj == null)
                 return 1;
 
-            return string.Compare(this.Name, obj.Name, StringComparison.OrdinalIgnoreCase);
+            return string.Compare(this.Name, Obj.Name, StringComparison.OrdinalIgnoreCase);
         }
     }
 
+    /// <summary>
+    /// Represents a Visual Studio package/component installed in an instance.
+    /// </summary>
     internal unsafe class VisualStudioPackage : IComparable, IComparable<VisualStudioPackage>
     {
+        /// <summary>
+        /// Gets the package/component ID.
+        /// </summary>
         public string Id { get; }
+
+        /// <summary>
+        /// Gets the version string of the package/component.
+        /// </summary>
         public string Version { get; }
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="VisualStudioPackage"/> class from a native package reference pointer.
+        /// </summary>
+        /// <param name="FromInstance">Pointer to the native ISetupPackageReference vtable.</param>
+        /// <param name="SetupInstancePtr">Pointer to the native package reference.</param>
         public VisualStudioPackage(ISetupPackageReferenceVTable* FromInstance, IntPtr SetupInstancePtr)
         {
-            IntPtr IdPtr;
-            IntPtr VersionPtr;
+            IntPtr idPtr;
+            IntPtr versionPtr;
 
-            if (FromInstance->GetId(SetupInstancePtr, &IdPtr).Succeeded && IdPtr != IntPtr.Zero)
+            if (FromInstance->GetId(SetupInstancePtr, &idPtr).Succeeded && idPtr != IntPtr.Zero)
             {
-                this.Id = Marshal.PtrToStringBSTR(IdPtr);
+                this.Id = BuildVisualStudio.BStrToStringAndFree(idPtr);
             }
 
-            if (FromInstance->GetVersion(SetupInstancePtr, &VersionPtr).Succeeded && VersionPtr != IntPtr.Zero)
+            if (FromInstance->GetVersion(SetupInstancePtr, &versionPtr).Succeeded && versionPtr != IntPtr.Zero)
             {
-                this.Version = Marshal.PtrToStringBSTR(VersionPtr);
+                this.Version = BuildVisualStudio.BStrToStringAndFree(versionPtr);
             }
         }
 
+        /// <summary>
+        /// Returns the package/component ID.
+        /// </summary>
+        /// <returns>The package/component ID.</returns>
         public override string ToString()
         {
             return this.Id;
         }
 
-        public int CompareTo(object obj)
+        /// <summary>
+        /// Compares this package to another object by ID.
+        /// </summary>
+        /// <param name="Obj">The object to compare to.</param>
+        /// <returns>
+        /// A value indicating the relative order of the packages.
+        /// </returns>
+        public int CompareTo(object Obj)
         {
-            if (obj == null)
+            if (Obj == null)
                 return 1;
 
-            if (obj is VisualStudioPackage package)
+            if (Obj is VisualStudioPackage package)
                 return string.Compare(this.Id, package.Id, StringComparison.OrdinalIgnoreCase);
             else
                 return 1;
         }
 
+        /// <summary>
+        /// Compares this package to another <see cref="VisualStudioPackage"/> by ID.
+        /// </summary>
+        /// <param name="obj">The package to compare to.</param>
+        /// <returns>
+        /// A value indicating the relative order of the packages.
+        /// </returns>
         public int CompareTo(VisualStudioPackage obj)
         {
             if (obj == null)

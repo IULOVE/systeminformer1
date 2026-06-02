@@ -23,7 +23,7 @@ VOID NTAPI TaskbarInitialize(
     VOID
     )
 {
-    TaskbarTransparencyEnabled = !!PhGetIntegerSetting(L"IconTransparencyEnabled");
+    TaskbarTransparencyEnabled = !!PhGetIntegerSetting(SETTING_ICON_TRANSPARENCY_ENABLED);
 
     if (TaskbarListIconType != TASKBAR_ICON_NONE)
     {
@@ -243,6 +243,7 @@ HICON PhGetBlackIcon(
     {
         ULONG width;
         ULONG height;
+        SIZE_T bitsSize;
         PVOID bits;
         HDC hdc;
         HBITMAP mask;
@@ -250,10 +251,15 @@ HICON PhGetBlackIcon(
         ICONINFO iconInfo;
 
         PhBeginBitmap2(&PhBlackBitmapContext, &width, &height, &PhBlackBitmap, &bits, &hdc, &oldBitmap);
-        memset(bits, TaskbarTransparencyEnabled ? 1 : 0, width * height * sizeof(RGBQUAD));
 
-        if (!(mask = CreateBitmap(width, height, 1, 1, NULL)))
+        if (!NT_SUCCESS(RtlSizeTMult(width, height, &bitsSize)) ||
+            !NT_SUCCESS(RtlSizeTMult(bitsSize, sizeof(RGBQUAD), &bitsSize)))
+        {
+            SelectBitmap(hdc, oldBitmap);
             return NULL;
+        }
+
+        memset(bits, TaskbarTransparencyEnabled ? 1 : 0, bitsSize);
 
         if (!(mask = CreateBitmap(width, height, 1, 1, NULL)))
             return NULL;
@@ -334,8 +340,8 @@ HICON PhUpdateIconCpuHistory(
     drawInfo.LineDataCount = lineDataCount;
     drawInfo.LineData1 = lineData1;
     drawInfo.LineData2 = lineData2;
-    drawInfo.LineColor1 = PhGetIntegerSetting(L"ColorCpuKernel");
-    drawInfo.LineColor2 = PhGetIntegerSetting(L"ColorCpuUser");
+    drawInfo.LineColor1 = PhGetIntegerSetting(SETTING_COLOR_CPU_KERNEL);
+    drawInfo.LineColor2 = PhGetIntegerSetting(SETTING_COLOR_CPU_USER);
     drawInfo.LineBackColor1 = PhHalveColorBrightness(drawInfo.LineColor1);
     drawInfo.LineBackColor2 = PhHalveColorBrightness(drawInfo.LineColor2);
     PhDrawGraphDirect(hdc, bits, &drawInfo);
@@ -408,8 +414,8 @@ HICON PhUpdateIconIoHistory(
     drawInfo.LineDataCount = lineDataCount;
     drawInfo.LineData1 = lineData1;
     drawInfo.LineData2 = lineData2;
-    drawInfo.LineColor1 = PhGetIntegerSetting(L"ColorIoReadOther");
-    drawInfo.LineColor2 = PhGetIntegerSetting(L"ColorIoWrite");
+    drawInfo.LineColor1 = PhGetIntegerSetting(SETTING_COLOR_IO_READ_OTHER);
+    drawInfo.LineColor2 = PhGetIntegerSetting(SETTING_COLOR_IO_WRITE);
     drawInfo.LineBackColor1 = PhHalveColorBrightness(drawInfo.LineColor1);
     drawInfo.LineBackColor2 = PhHalveColorBrightness(drawInfo.LineColor2);
     PhDrawGraphDirect(hdc, bits, &drawInfo);
@@ -473,7 +479,7 @@ HICON PhUpdateIconCommitHistory(
 
     drawInfo.LineDataCount = lineDataCount;
     drawInfo.LineData1 = lineData1;
-    drawInfo.LineColor1 = PhGetIntegerSetting(L"ColorPrivate");
+    drawInfo.LineColor1 = PhGetIntegerSetting(SETTING_COLOR_PRIVATE);
     drawInfo.LineBackColor1 = PhHalveColorBrightness(drawInfo.LineColor1);
     PhDrawGraphDirect(hdc, bits, &drawInfo);
 
@@ -535,7 +541,7 @@ HICON PhUpdateIconPhysicalHistory(
 
     drawInfo.LineDataCount = lineDataCount;
     drawInfo.LineData1 = lineData1;
-    drawInfo.LineColor1 = PhGetIntegerSetting(L"ColorPhysical");
+    drawInfo.LineColor1 = PhGetIntegerSetting(SETTING_COLOR_PHYSICAL);
     drawInfo.LineBackColor1 = PhHalveColorBrightness(drawInfo.LineColor1);
     PhDrawGraphDirect(hdc, bits, &drawInfo);
 
@@ -565,8 +571,8 @@ HICON PhUpdateIconCpuUsage(
 
     // This stuff is copied from CpuUsageIcon.cs (PH 1.x).
     {
-        COLORREF kColor = PhGetIntegerSetting(L"ColorCpuKernel");
-        COLORREF uColor = PhGetIntegerSetting(L"ColorCpuUser");
+        COLORREF kColor = PhGetIntegerSetting(SETTING_COLOR_CPU_KERNEL);
+        COLORREF uColor = PhGetIntegerSetting(SETTING_COLOR_CPU_USER);
         COLORREF kbColor = PhHalveColorBrightness(kColor);
         COLORREF ubColor = PhHalveColorBrightness(uColor);
         FLOAT k = Statistics->CpuKernelUsage;
@@ -578,12 +584,13 @@ HICON PhUpdateIconCpuUsage(
         HPEN dcPen;
         POINT points[2];
 
-        dcBrush = GetStockBrush(DC_BRUSH);
-        dcPen = GetStockPen(DC_PEN);
+        dcBrush = PhGetStockBrush(DC_BRUSH);
+        dcPen = PhGetStockPen(DC_PEN);
         rect.left = 0;
         rect.top = 0;
         rect.right = width;
         rect.bottom = height;
+        SelectBrush(hdc, dcBrush);
         SetDCBrushColor(hdc, RGB(0x00, 0x00, 0x00));
         FillRect(hdc, &rect, dcBrush);
 
@@ -604,6 +611,7 @@ HICON PhUpdateIconCpuUsage(
             rect.top = height - ul - kl;
             rect.right = width;
             rect.bottom = height - kl;
+            SelectBrush(hdc, dcBrush);
             SetDCBrushColor(hdc, ubColor);
             FillRect(hdc, &rect, dcBrush);
 
@@ -622,6 +630,7 @@ HICON PhUpdateIconCpuUsage(
                 rect.top = height - kl;
                 rect.right = width;
                 rect.bottom = height;
+                SelectBrush(hdc, dcBrush);
                 SetDCBrushColor(hdc, kbColor);
                 FillRect(hdc, &rect, dcBrush);
 

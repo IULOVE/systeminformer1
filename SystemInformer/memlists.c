@@ -14,6 +14,7 @@
 #include <phplug.h>
 #include <emenu.h>
 #include <settings.h>
+#include <phsettings.h>
 #include <actions.h>
 #include <phsvccl.h>
 #include <kphuser.h>
@@ -622,7 +623,7 @@ VOID PhMemoryListCommandDialog(
     config.cbSize = sizeof(TASKDIALOGCONFIG);
     config.dwFlags = TDF_USE_HICON_MAIN | TDF_POSITION_RELATIVE_TO_WINDOW | TDF_SHOW_PROGRESS_BAR | TDF_CAN_BE_MINIMIZED | TDF_CALLBACK_TIMER;
     config.dwCommonButtons = TDCBF_CLOSE_BUTTON | TDCBF_CANCEL_BUTTON;
-    config.hMainIcon = PhGetApplicationIcon(FALSE);
+    config.hMainIcon = PhGetApplicationIcon(FALSE, PhGetWindowDpi(PrentWindow));
     config.pfCallback = PhMemoryListCommandDialogCallbackProc;
     config.hwndParent = PrentWindow;
     config.lpCallbackData = (LONG_PTR)context;
@@ -744,7 +745,10 @@ INT_PTR CALLBACK PhpMemoryListsDlgProc(
             PhRegisterCallback(PhGetGeneralCallback(GeneralCallbackProcessProviderUpdatedEvent), ProcessesUpdatedCallback, NULL, &ProcessesUpdatedRegistration);
             PhpUpdateMemoryListInfo(hwndDlg);
 
-            PhLoadWindowPlacementFromSetting(L"MemoryListsWindowPosition", NULL, hwndDlg);
+            if (PhValidWindowPlacementFromSetting(SETTING_MEMORY_LISTS_WINDOW_POSITION))
+                PhLoadWindowPlacementFromSetting(SETTING_MEMORY_LISTS_WINDOW_POSITION, NULL, hwndDlg);
+            else
+                PhCenterWindow(hwndDlg, GetParent(hwndDlg));
             PhRegisterDialog(hwndDlg);
 
             PhInitializeWindowTheme(hwndDlg, PhEnableThemeSupport);
@@ -753,7 +757,7 @@ INT_PTR CALLBACK PhpMemoryListsDlgProc(
     case WM_DESTROY:
         {
             PhUnregisterDialog(hwndDlg);
-            PhSaveWindowPlacementToSetting(L"MemoryListsWindowPosition", NULL, hwndDlg);
+            PhSaveWindowPlacementToSetting(SETTING_MEMORY_LISTS_WINDOW_POSITION, NULL, hwndDlg);
 
             PhUnregisterCallback(PhGetGeneralCallback(GeneralCallbackProcessProviderUpdatedEvent), &ProcessesUpdatedRegistration);
 

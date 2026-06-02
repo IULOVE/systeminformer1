@@ -11,9 +11,38 @@
 
 namespace CustomBuildTool
 {
+    /// <summary>
+    /// Provides utility methods for interacting with the Windows file system, environment variables, processes, and
+    /// registry, as well as other Win32-related operations.
+    /// </summary>
     public static unsafe class Win32
     {
-        private static readonly char[] PathSeparator = [';'];
+        private static readonly FrozenSet<string> RequiredPathEntries = new[]
+        {
+            // Windows system directories
+            "\\Windows\\System32",
+            "\\Windows\\",
+            "\\Windows\\System32\\Wbem",
+            "\\Windows\\System32\\WindowsPowerShell",
+            "\\Windows\\System32\\OpenSSH",
+
+            // Build tools
+            "\\Microsoft Visual Studio",
+            "\\MSBuild",
+            "\\Windows Kits",
+            "\\dotnet",
+
+            // Version control
+            "\\git",
+            "\\GitHub CLI",
+
+            // CMake and build tools
+            "\\CMake",
+            "\\vcpkg",
+            "\\ninja",
+            "\\LLVM",
+            "\\mingw",
+        }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// Creates all directories and subdirectories in the specified path unless they already exist.
@@ -39,6 +68,74 @@ namespace CustomBuildTool
         /// <param name="FixNewLines"></param>
         /// <param name="RedirectOutput"></param>
         /// <returns>If the creation succeeds, the return value is nonzero.</returns>
+        public static int CreateProcess(string FileName, IEnumerable<string> Arguments, out string OutputString, bool FixNewLines = true, bool RedirectOutput = true)
+        {
+            int exitcode = int.MaxValue;
+            StringBuilder output = new StringBuilder(0x1000);
+            StringBuilder error = new StringBuilder(0x1000);
+
+            try
+            {
+                using (Process process = new Process())
+                {
+                    process.StartInfo.FileName = FileName;
+                    process.StartInfo.UseShellExecute = false;
+
+                    if (Arguments != null)
+                    {
+                        foreach (string argument in Arguments)
+                        {
+                            process.StartInfo.ArgumentList.Add(argument);
+                        }
+                    }
+
+                    if (RedirectOutput)
+                    {
+                        process.StartInfo.RedirectStandardOutput = true;
+                        process.StartInfo.RedirectStandardError = true;
+                        process.StartInfo.StandardErrorEncoding = Utils.UTF8NoBOM;
+                        process.StartInfo.StandardOutputEncoding = Utils.UTF8NoBOM;
+                        process.OutputDataReceived += (_, e) => { if (e.Data != null) output.AppendLine(e.Data); };
+                        process.ErrorDataReceived += (_, e) => { if (e.Data != null) error.AppendLine(e.Data); };
+                    }
+
+                    process.Start();
+
+                    if (RedirectOutput)
+                    {
+                        process.BeginOutputReadLine();
+                        process.BeginErrorReadLine();
+                    }
+
+                    process.WaitForExit();
+
+                    exitcode = process.ExitCode;
+                }
+            }
+            catch (Exception ex)
+            {
+                Program.PrintColorMessage($"[CreateProcess] {ex}", ConsoleColor.Red);
+            }
+
+            OutputString = (output.ToString().Trim() + error.ToString().Trim());
+
+            if (FixNewLines)
+            {
+                OutputString = OutputString.Replace("\n\n", "\r\n", StringComparison.OrdinalIgnoreCase).Trim();
+            }
+
+            return exitcode;
+        }
+
+        /// <summary>
+        /// Creates a new process and buffers the output into a string using a raw command-line argument string.
+        /// </summary>
+        /// <param name="FileName">The name of the application to start.</param>
+        /// <param name="Arguments">The raw argument string to pass to the application.</param>
+        /// <param name="OutputString">The output from the application</param>
+        /// <param name="FixNewLines"></param>
+        /// <param name="RedirectOutput"></param>
+        /// <returns>If the creation succeeds, the return value is nonzero.</returns>
         public static int CreateProcess(string FileName, string Arguments, out string OutputString, bool FixNewLines = true, bool RedirectOutput = true)
         {
             int exitcode = int.MaxValue;
@@ -50,8 +147,12 @@ namespace CustomBuildTool
                 using (Process process = new Process())
                 {
                     process.StartInfo.FileName = FileName;
-                    process.StartInfo.Arguments = Arguments;
                     process.StartInfo.UseShellExecute = false;
+
+                    if (!string.IsNullOrWhiteSpace(Arguments))
+                    {
+                        process.StartInfo.Arguments = Arguments;
+                    }
 
                     if (RedirectOutput)
                     {
@@ -59,8 +160,8 @@ namespace CustomBuildTool
                         process.StartInfo.RedirectStandardError = true;
                         process.StartInfo.StandardErrorEncoding = Utils.UTF8NoBOM;
                         process.StartInfo.StandardOutputEncoding = Utils.UTF8NoBOM;
-                        process.OutputDataReceived += (_, e) => { output.AppendLine(e.Data); };
-                        process.ErrorDataReceived += (_, e) => { error.AppendLine(e.Data); };
+                        process.OutputDataReceived += (_, e) => { if (e.Data != null) output.AppendLine(e.Data); };
+                        process.ErrorDataReceived += (_, e) => { if (e.Data != null) error.AppendLine(e.Data); };
                     }
 
                     process.Start();
@@ -114,6 +215,7 @@ namespace CustomBuildTool
         /// Deletes the specified file.
         /// </summary>
         /// <param name="FileName">The file name or path.</param>
+        /// <param name="Flags"></param>
         public static void DeleteFile(string FileName, BuildFlags Flags = BuildFlags.None)
         {
             if (string.IsNullOrWhiteSpace(FileName))
@@ -148,6 +250,24 @@ namespace CustomBuildTool
                     return where;
             }
 
+            // %PATH% directory.
+            {
+                if (Win32.GetEnvironmentVariable("PATH", out string values))
+                {
+                    foreach (var range in values.AsSpan().Split(';'))
+                    {
+                        var path = values.AsSpan(range);
+                        if (path.IsWhiteSpace())
+                            continue;
+
+                        string where = Path.Join(path, FileName.AsSpan());
+
+                        if (File.Exists(where))
+                            return where;
+                    }
+                }
+            }
+
             // Current directory.
             {
                 if (File.Exists(FileName))
@@ -156,39 +276,33 @@ namespace CustomBuildTool
                 }
             }
 
-            // %PATH% directory.
-            {
-                if (Win32.GetEnvironmentVariable("PATH", out string values))
-                {
-                    foreach (string path in values.Split(PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-                    {
-                        string where = Path.Join([path, FileName]);
-
-                        if (File.Exists(where))
-                            return where;
-                    }
-                }
-            }
-
             return null;
         }
 
+        /// <summary>
+        /// Copies the source file to the destination file if the source is newer or the destination does not exist.
+        /// Preserves creation and last write times, and optionally sets the read-only attribute.
+        /// </summary>
+        /// <param name="SourceFile">The path to the source file.</param>
+        /// <param name="DestinationFile">The path to the destination file.</param>
+        /// <param name="Flags">Build flags controlling output verbosity and behavior.</param>
+        /// <param name="ReadOnly">If true, sets the destination file as read-only after copying.</param>
         public static void CopyIfNewer(string SourceFile, string DestinationFile, BuildFlags Flags = BuildFlags.None, bool ReadOnly = false)
         {
             bool updated = false;
 
             if (!File.Exists(SourceFile))
             {
-                if (!Build.BuildIntegration && SourceFile.EndsWith(".sig", StringComparison.OrdinalIgnoreCase))
+                if (!Build.BuildIntegration && SourceFile!.EndsWith(".sig", StringComparison.OrdinalIgnoreCase))
                     return;
 
-                Program.PrintColorMessage($"[CopyIfNewer-FileNotFound] {SourceFile}", ConsoleColor.Yellow);
+                Program.PrintColorMessage($"[SDK] [CopyIfNewer-FileNotFound] {SourceFile}", ConsoleColor.Yellow);
                 return;
             }
 
             if (string.IsNullOrWhiteSpace(DestinationFile))
             {
-                Program.PrintColorMessage($"[CopyIfNewer-DestinationFile-null]", ConsoleColor.Yellow);
+                Program.PrintColorMessage($"[SDK] [CopyIfNewer-DestinationFile-null]", ConsoleColor.Yellow);
                 return;
             }
 
@@ -197,7 +311,7 @@ namespace CustomBuildTool
 
                 if (string.IsNullOrWhiteSpace(directory))
                 {
-                    Program.PrintColorMessage($"[CopyIfNewer-DestinationFile-null]", ConsoleColor.Yellow);
+                    Program.PrintColorMessage($"[SDK] [CopyIfNewer-DestinationFile-null]", ConsoleColor.Yellow);
                     return;
                 }
 
@@ -206,23 +320,26 @@ namespace CustomBuildTool
 
             if (File.Exists(DestinationFile))
             {
-                GetFileBasicInfo(SourceFile, out var sourceCreationTime, out var sourceWriteTime, out var SourceAttributes);
-                GetFileBasicInfo(DestinationFile, out var destinationCreationTime, out var destinationWriteTime, out var DestinationAttributes);
+                Win32.GetFileBasicInfo(SourceFile, out var sourceCreationTime, out var sourceWriteTime, out var sourceAttributes);
+                Win32.GetFileBasicInfo(DestinationFile, out var destinationCreationTime, out var destinationWriteTime, out var destinationAttributes);
 
-                if (!(sourceCreationTime == destinationCreationTime && sourceWriteTime == destinationWriteTime))
+                if (sourceWriteTime != destinationWriteTime || sourceCreationTime != destinationCreationTime)
                 {
-                    if ((DestinationAttributes & FileAttributes.ReadOnly) != 0)
-                        File.SetAttributes(DestinationFile, FileAttributes.Normal);
+                    if ((destinationAttributes & FileAttributes.ReadOnly) != 0)
+                    {
+                        try { File.SetAttributes(DestinationFile, FileAttributes.Normal); } catch { }
+                    }
+
                     File.Copy(SourceFile, DestinationFile, true);
-                    SetFileBasicInfo(DestinationFile, sourceCreationTime, sourceWriteTime, ReadOnly);
+                    Win32.SetFileBasicInfo(DestinationFile, sourceCreationTime, sourceWriteTime, ReadOnly);
                     updated = true;
                 }
             }
             else
             {
-                GetFileBasicInfo(SourceFile, out var sourceCreationTime, out var sourceWriteTime, out _);
+                Win32.GetFileBasicInfo(SourceFile, out var sourceCreationTime, out var sourceWriteTime, out _);
                 File.Copy(SourceFile, DestinationFile, true);
-                SetFileBasicInfo(DestinationFile, sourceCreationTime, sourceWriteTime, ReadOnly);
+                Win32.SetFileBasicInfo(DestinationFile, sourceCreationTime, sourceWriteTime, ReadOnly);
                 updated = true;
             }
 
@@ -230,10 +347,14 @@ namespace CustomBuildTool
             {
                 Program.PrintColorMessage($"[SDK] {SourceFile} copied to {DestinationFile}", ConsoleColor.Green, true, Flags);
             }
-            //else
-            //    Program.PrintColorMessage($"[SDK] Skipped: {SourceFile} same as {DestinationFile}", ConsoleColor.DarkGray, true, Flags);
         }
 
+        /// <summary>
+        /// Copies the source file to the destination file if the source has a newer last write time or a higher file version.
+        /// </summary>
+        /// <param name="SourceFile">The path to the source file.</param>
+        /// <param name="DestinationFile">The path to the destination file.</param>
+        /// <param name="Flags">Build flags controlling output verbosity and behavior.</param>
         public static void CopyVersionIfNewer(string SourceFile, string DestinationFile, BuildFlags Flags = BuildFlags.None)
         {
             bool updated = false;
@@ -246,33 +367,41 @@ namespace CustomBuildTool
 
             if (string.IsNullOrWhiteSpace(DestinationFile))
             {
-                Program.PrintColorMessage($"[CopyVersionIfNewer-DestinationFile]", ConsoleColor.Yellow);
+                Program.PrintColorMessage("[CopyVersionIfNewer-DestinationFile]", ConsoleColor.Yellow);
                 return;
             }
 
             {
                 string directory = Path.GetDirectoryName(DestinationFile);
 
-                if (string.IsNullOrWhiteSpace(directory))
+                if (string.IsNullOrEmpty(directory) || string.IsNullOrWhiteSpace(directory))
                     return;
 
-                Win32.CreateDirectory(directory);
+                CreateDirectory(directory);
             }
 
             if (File.Exists(DestinationFile))
             {
-                if (
-                    File.GetLastWriteTime(SourceFile) > File.GetLastWriteTime(DestinationFile) ||
-                    Win32.GetFileVersion(SourceFile) > Win32.GetFileVersion(DestinationFile)
-                    )
+                GetFileBasicInfo(SourceFile, out var sourceCreationTime, out var sourceWriteTime, out _);
+                GetFileBasicInfo(DestinationFile, out _, out var destinationWriteTime, out var destinationAttributes);
+
+                if (sourceWriteTime > destinationWriteTime || GetFileVersion(SourceFile) > GetFileVersion(DestinationFile))
                 {
+                    if ((destinationAttributes & FileAttributes.ReadOnly) != 0)
+                    {
+                        try { File.SetAttributes(DestinationFile, FileAttributes.Normal); } catch { }
+                    }
+
                     File.Copy(SourceFile, DestinationFile, true);
+                    SetFileBasicInfo(DestinationFile, sourceCreationTime, sourceWriteTime, false);
                     updated = true;
                 }
             }
             else
             {
+                GetFileBasicInfo(SourceFile, out var sourceCreationTime, out var sourceWriteTime, out _);
                 File.Copy(SourceFile, DestinationFile, true);
+                SetFileBasicInfo(DestinationFile, sourceCreationTime, sourceWriteTime, false);
                 updated = true;
             }
 
@@ -280,8 +409,6 @@ namespace CustomBuildTool
             {
                 Program.PrintColorMessage($"[SDK] {SourceFile} copied to {DestinationFile}", ConsoleColor.Green, true, Flags);
             }
-            //else
-            //    Program.PrintColorMessage($"[SDK] Skipped: {SourceFile} older than {DestinationFile}", ConsoleColor.DarkGray, true, Flags);
         }
 
         /// <summary>
@@ -376,17 +503,27 @@ namespace CustomBuildTool
             return null;
         }
 
+        /// <summary>
+        /// Retrieves a string value from the Windows registry.
+        /// </summary>
+        /// <param name="LocalMachine">If true, queries HKEY_LOCAL_MACHINE; otherwise, HKEY_CURRENT_USER.</param>
+        /// <param name="KeyName">The registry key path.</param>
+        /// <param name="ValueName">The name of the value to retrieve. (Note: This parameter is not used in the current implementation.)</param>
+        /// <param name="DefaultValue">The value to return if the registry value is not found or is empty.</param>
+        /// <returns>The string value from the registry, or <paramref name="DefaultValue"/> if not found.</returns>
         public static string GetKeyValue(bool LocalMachine, string KeyName, string ValueName, string DefaultValue)
         {
+            // required for the ESDK
             string value = string.Empty;
-            byte* valueBuffer;
+            byte* valueBuffer = null;
             HKEY keyHandle;
 
-            fixed (char* p = KeyName)
+            fixed (char* pKey = KeyName)
+            fixed (char* pValue = ValueName)
             {
                 if (PInvoke.RegOpenKeyEx(
                     LocalMachine ? HKEY.HKEY_LOCAL_MACHINE : HKEY.HKEY_CURRENT_USER,
-                    p,
+                    pKey,
                     0,
                     REG_SAM_FLAGS.KEY_READ,
                     &keyHandle
@@ -397,30 +534,44 @@ namespace CustomBuildTool
 
                     PInvoke.RegQueryValueEx(
                         keyHandle,
-                        p,
+                        pValue,
                         null,
                         &valueType,
                         null,
                         &valueLength
                         );
 
-                    if (valueType == REG_VALUE_TYPE.REG_SZ || valueLength > 4)
+                    if ((valueType == REG_VALUE_TYPE.REG_SZ || valueType == REG_VALUE_TYPE.REG_EXPAND_SZ) && valueLength >= sizeof(char))
                     {
-                        valueBuffer = (byte*)NativeMemory.Alloc(valueLength);
-
-                        if (PInvoke.RegQueryValueEx(
-                            keyHandle,
-                            p,
-                            null,
-                            null,
-                            valueBuffer,
-                            &valueLength
-                            ) == WIN32_ERROR.ERROR_SUCCESS)
+                        try
                         {
-                            value = new string((char*)valueBuffer, 0, (int)valueLength / 2 - 1);
-                        }
+                            valueBuffer = (byte*)NativeMemory.Alloc(valueLength);
 
-                        NativeMemory.Free(valueBuffer);
+                            if (PInvoke.RegQueryValueEx(
+                                keyHandle,
+                                pValue,
+                                null,
+                                null,
+                                valueBuffer,
+                                &valueLength
+                                ) == WIN32_ERROR.ERROR_SUCCESS)
+                            {
+                                int charLength = (int)(valueLength / sizeof(char));
+
+                                if (charLength > 0 && ((char*)valueBuffer)[charLength - 1] == '\0')
+                                    charLength--;
+
+                                if (charLength > 0)
+                                {
+                                    ReadOnlySpan<char> valueSpan = new ReadOnlySpan<char>((char*)valueBuffer, charLength);
+                                    value = valueSpan.ToString();
+                                }
+                            }
+                        }
+                        finally
+                        {
+                            NativeMemory.Free(valueBuffer);
+                        }
                     }
 
                     _ = PInvoke.RegCloseKey(keyHandle);
@@ -430,6 +581,11 @@ namespace CustomBuildTool
             return string.IsNullOrWhiteSpace(value) ? DefaultValue : value;
         }
 
+        /// <summary>
+        /// Gets the size of a file in bytes.
+        /// </summary>
+        /// <param name="FileName">The path to the file.</param>
+        /// <returns>The size of the file in bytes, or 0 if the file does not exist or cannot be accessed.</returns>
         public static ulong GetFileSize(string FileName)
         {
             WIN32_FILE_ATTRIBUTE_DATA sourceFile = new WIN32_FILE_ATTRIBUTE_DATA();
@@ -440,32 +596,47 @@ namespace CustomBuildTool
                 &sourceFile
                 ))
             {
-                return (ulong)sourceFile.nFileSizeHigh << 32 | (ulong)sourceFile.nFileSizeLow;
+                return ((ulong)sourceFile.nFileSizeHigh << 32) | sourceFile.nFileSizeLow;
             }
 
             return 0;
         }
 
+        /// <summary>
+        /// Retrieves the version information of a file.
+        /// </summary>
+        /// <param name="FileName">The path to the file.</param>
+        /// <returns>The <see cref="Version"/> of the file, or 0.0.0.0 if not found.</returns>
         public static Version GetFileVersion(string FileName)
         {
-            FileVersionInfo versionInfo = FileVersionInfo.GetVersionInfo(FileName);
-
-            if (string.IsNullOrWhiteSpace(versionInfo.FileVersion))
+            try
             {
-                return Version.Parse("0.0.0.0");
-            }
+                FileVersionInfo versionInfo = FileVersionInfo.GetVersionInfo(FileName);
 
-            return Version.Parse(versionInfo.FileVersion);
+                return new Version(
+                    versionInfo.FileMajorPart,
+                    versionInfo.FileMinorPart,
+                    versionInfo.FileBuildPart,
+                    versionInfo.FilePrivatePart
+                    );
+            }
+            catch (Exception)
+            {
+                return new Version(0, 0, 0, 0);
+            }
         }
 
+        /// <summary>
+        /// Sets the current process priority class to high.
+        /// </summary>
         public static void SetErrorMode()
         {
-            PInvoke.SetPriorityClass(
-                PInvoke.GetCurrentProcess(),
-                PROCESS_CREATION_FLAGS.HIGH_PRIORITY_CLASS
-                );
+            PInvoke.SetErrorMode(THREAD_ERROR_MODE.SEM_NOGPFAULTERRORBOX | THREAD_ERROR_MODE.SEM_NOOPENFILEERRORBOX);
         }
 
+        /// <summary>
+        /// Sets the current process priority class to high.
+        /// </summary>
         public static void SetBasePriority()
         {
             //Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
@@ -475,6 +646,87 @@ namespace CustomBuildTool
                 );
         }
 
+        public static bool IsGitInstalled()
+        {
+            return SearchPath("git.exe") != null;
+        }
+
+        public static string GetDotNetPath()
+        {
+            return SearchPath("dotnet.exe");
+        }
+
+        public static string GetDotNetVersion()
+        {
+            string dotnet = GetDotNetPath();
+            if (dotnet == null)
+                return string.Empty;
+
+            if (CreateProcess(dotnet, ["--version"], out string output) == 0)
+                return output.Trim();
+
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// Filters the PATH environment variable to include only directories essential for building System Informer.
+        /// Removes scripting languages (Python, Ruby, Node.js) and other non-essential tools.
+        /// </summary>
+        /// <remarks>
+        /// This method is called during build initialization and keeps essential build tools
+        /// while removing potentially unnecessary dependencies.
+        /// </remarks>
+        public static void SetPathEnvironment()
+        {
+            if (!GetEnvironmentVariable("PATH", out string currentPath))
+                return;
+
+            List<string> allowedPaths = new List<string>();
+
+            foreach (var range in currentPath.AsSpan().Split(';'))
+            {
+                var entry = currentPath.AsSpan(range);
+                if (entry.IsWhiteSpace())
+                    continue;
+
+                bool isEssential = false;
+
+                foreach (string pattern in RequiredPathEntries)
+                {
+                    if (entry.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+                    {
+                        isEssential = true;
+                        break;
+                    }
+                }
+
+                if (isEssential)
+                {
+                    allowedPaths.Add(entry.ToString());
+                }
+            }
+
+            if (allowedPaths.Count > 0)
+            {
+                string filteredPath = string.Join(';', allowedPaths);
+
+                if (!string.IsNullOrWhiteSpace(filteredPath))
+                {
+                    Environment.SetEnvironmentVariable("PATH", filteredPath, EnvironmentVariableTarget.Process);
+                }
+
+                //Program.PrintColorMessage($"[PATH] filtered: {pathEntries.Length} entries -> {allowedPaths.Count} entries", ConsoleColor.DarkGray);
+            }
+        }
+
+        /// <summary>
+        /// Sets the basic file information, including creation and last write times, and optionally the read-only attribute.
+        /// </summary>
+        /// <param name="FileName">The path to the file.</param>
+        /// <param name="CreationDateTime">The creation time to set. If <see cref="DateTime.MinValue"/>, uses current UTC time.</param>
+        /// <param name="LastWriteDateTime">The last write time to set. If <see cref="DateTime.MinValue"/>, uses current UTC time.</param>
+        /// <param name="ReadOnly">Whether to set the file as read-only.</param>
+        /// <exception cref="System.ComponentModel.Win32Exception">Thrown if the file information cannot be set.</exception>
         public static void SetFileBasicInfo(
             string FileName,
             DateTime CreationDateTime,
@@ -493,12 +745,17 @@ namespace CustomBuildTool
                 FileOptions.None
                 ))
             {
-                if (!PInvoke.GetFileInformationByHandleEx(fs.SafeFileHandle, FILE_INFO_BY_HANDLE_CLASS.FileBasicInfo, &basicInfo, (uint)sizeof(FILE_BASIC_INFO)))
-                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+                if (fs.SafeFileHandle == null)
+                    return;
+
+                var handle = new HANDLE(fs.SafeFileHandle.DangerousGetHandle());
+
+                if (!PInvoke.GetFileInformationByHandleEx(handle, FILE_INFO_BY_HANDLE_CLASS.FileBasicInfo, &basicInfo, (uint)sizeof(FILE_BASIC_INFO)))
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
 
                 basicInfo.CreationTime = CreationDateTime == DateTime.MinValue ? DateTime.UtcNow.ToFileTimeUtc() : CreationDateTime.ToFileTimeUtc();
                 basicInfo.LastWriteTime = LastWriteDateTime == DateTime.MinValue ? DateTime.UtcNow.ToFileTimeUtc() : LastWriteDateTime.ToFileTimeUtc();
-                
+
                 if (!Build.BuildIntegration) // Skip read-only attribute during build integration (dmex)
                 {
                     if (ReadOnly)
@@ -507,10 +764,19 @@ namespace CustomBuildTool
                         basicInfo.FileAttributes &= ~(uint)FileAttributes.ReadOnly;
                 }
 
-                PInvoke.SetFileInformationByHandle(fs.SafeFileHandle, FILE_INFO_BY_HANDLE_CLASS.FileBasicInfo, &basicInfo, (uint)sizeof(FILE_BASIC_INFO));
+                PInvoke.SetFileInformationByHandle(handle, FILE_INFO_BY_HANDLE_CLASS.FileBasicInfo, &basicInfo, (uint)sizeof(FILE_BASIC_INFO));
             }
         }
 
+        /// <summary>
+        /// Retrieves basic file information, including creation time, last write time, and attributes.
+        /// </summary>
+        /// <param name="FileName">The path to the file.</param>
+        /// <param name="CreationTime">When this method returns, contains the creation time of the file.</param>
+        /// <param name="LastWriteDateTime">When this method returns, contains the last write time of the file.</param>
+        /// <param name="Attributes">When this method returns, contains the file attributes.</param>
+        /// <returns>True if the file exists and information was retrieved; otherwise, false.</returns>
+        /// <exception cref="System.ComponentModel.Win32Exception">Thrown if the file information cannot be retrieved.</exception>
         public static bool GetFileBasicInfo(
             string FileName,
             out DateTime CreationTime,
@@ -525,14 +791,16 @@ namespace CustomBuildTool
 
             if (!File.Exists(FileName))
             {
-                Attributes =  FileAttributes.None;
+                Attributes = FileAttributes.None;
                 return false;
             }
 
             using (var fs = File.OpenRead(FileName))
             {
-                if (!PInvoke.GetFileInformationByHandleEx(fs.SafeFileHandle, FILE_INFO_BY_HANDLE_CLASS.FileBasicInfo, &basicInfo, (uint)sizeof(FILE_BASIC_INFO)))
-                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+                var handle = new HANDLE(fs.SafeFileHandle!.DangerousGetHandle());
+
+                if (!PInvoke.GetFileInformationByHandleEx(handle, FILE_INFO_BY_HANDLE_CLASS.FileBasicInfo, &basicInfo, (uint)sizeof(FILE_BASIC_INFO)))
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
 
                 CreationTime = DateTime.FromFileTimeUtc(basicInfo.CreationTime);
                 LastWriteDateTime = DateTime.FromFileTimeUtc(basicInfo.LastWriteTime);
@@ -540,6 +808,167 @@ namespace CustomBuildTool
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Sets low (untrusted) integrity level for processes.
+        /// </summary>
+        /// <remarks>
+        /// This method lists all running processes, identifies those with executables in
+        /// temporary folders (containing "\Temp\"), and attempts to lower their integrity level
+        /// to Untrusted (S-1-16-0). This is a security mitigation technique.
+        /// </remarks>
+        public static void SetLowIntegrityForProcesses()
+        {
+            const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+            const uint TOKEN_QUERY = 0x0008;
+            const uint TOKEN_ADJUST_DEFAULT = 0x0080;
+            const uint SE_GROUP_INTEGRITY = 0x00000020;
+            const uint SECURITY_MANDATORY_UNTRUSTED_RID = 0x00000000;
+            const int TokenIntegrityLevel = 25;
+
+            var processesToModify = new List<Process>();
+
+            try
+            {
+                var allProcesses = Process.GetProcesses();
+
+                foreach (var process in allProcesses)
+                {
+                    try
+                    {
+                        var filename = process.MainModule?.FileName;
+                        if (!string.IsNullOrEmpty(filename) &&
+                            filename.Contains("\\Temp\\", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Program.PrintColorMessage($"Process: {filename}", ConsoleColor.DarkGray);
+                            processesToModify.Add(process);
+                        }
+                        else
+                        {
+                            process.Dispose();
+                        }
+                    }
+                    catch
+                    {
+                        process.Dispose();
+                    }
+                }
+
+                foreach (var process in processesToModify)
+                {
+                    try
+                    {
+                        ApplyLowIntegrity(
+                            process,
+                            PROCESS_QUERY_LIMITED_INFORMATION,
+                            TOKEN_QUERY | TOKEN_ADJUST_DEFAULT,
+                            SE_GROUP_INTEGRITY,
+                            SECURITY_MANDATORY_UNTRUSTED_RID,
+                            TokenIntegrityLevel
+                            );
+                    }
+                    catch (Exception ex)
+                    {
+                        Program.PrintColorMessage(
+                            $"Failed to set integrity for {process.ProcessName} (PID: {process.Id}): {ex.Message}",
+                            ConsoleColor.Yellow
+                            );
+                    }
+                    finally
+                    {
+                        process.Dispose();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Program.PrintColorMessage($"Error enumerating processes: {ex.Message}", ConsoleColor.Red);
+            }
+        }
+
+        /// <summary>
+        /// Sets the specified process's token integrity level to low by updating its mandatory label information.
+        /// </summary>
+        /// <param name="Process">The process whose token integrity level will be modified.</param>
+        /// <param name="ProcessAccess">The access rights required to open the target process. Must be enough to allow token manipulation.</param>
+        /// <param name="TokenAccess">The access rights required to open the process token. Must permit setting token information.</param>
+        /// <param name="SidAttributes">The attributes to assign to the integrity SID in the token mandatory label.</param>
+        /// <param name="MandatoryRid">The relative identifier (RID) used to construct the integrity SID. Typically, specifies the desired integrity
+        /// level.</param>
+        /// <param name="TokenInfoClass">The token information class specifying the type of information to set. Must correspond to mandatory label
+        /// information.</param>
+        /// <exception cref="Win32Exception">Thrown if any Windows API call fails, such as opening the process, opening the process token, or setting
+        /// token information.</exception>
+        private static void ApplyLowIntegrity(
+            Process Process,
+            uint ProcessAccess,
+            uint TokenAccess,
+            uint SidAttributes,
+            uint MandatoryRid,
+            int TokenInfoClass
+            )
+        {
+            HANDLE processHandle = default;
+            HANDLE tokenHandle = default;
+
+            try
+            {
+                processHandle = PInvoke.OpenProcess((PROCESS_ACCESS_RIGHTS)ProcessAccess, false, (uint)Process.Id);
+
+                if (processHandle.IsNull)
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), $"OpenProcess failed for {Process.ProcessName}");
+                }
+
+                if (!PInvoke.OpenProcessToken(processHandle, (TOKEN_ACCESS_MASK)TokenAccess, &tokenHandle))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "OpenProcessToken failed");
+                }
+
+                // Manually construct the Untrusted Integrity SID (S-1-16-0)
+                // SID structure: Revision(1) + SubAuthorityCount(1) + Authority(6 bytes) + SubAuthority(4 bytes)
+                byte* sidBuffer = stackalloc byte[12];
+                Span<byte> sidSpan = new Span<byte>(sidBuffer, 12);
+                sidSpan.Clear();
+                sidSpan[0] = 1;  // SID_REVISION
+                sidSpan[1] = 1;  // SubAuthorityCount
+                sidSpan[7] = 16; // IdentifierAuthority[5] - SECURITY_MANDATORY_LABEL_AUTHORITY (S-1-16)
+                BinaryPrimitives.WriteUInt32LittleEndian(sidSpan[8..], MandatoryRid); // SubAuthority[0] = mandatoryRid (little-endian)
+                var integritySid = new PSID(sidBuffer);
+                var tokenMandatoryLabel = new TOKEN_MANDATORY_LABEL
+                {
+                    Label = new SID_AND_ATTRIBUTES
+                    {
+                        Attributes = SidAttributes,
+                        Sid = integritySid
+                    }
+                };
+
+                if (!PInvoke.SetTokenInformation(
+                    tokenHandle,
+                    (TOKEN_INFORMATION_CLASS)TokenInfoClass,
+                    &tokenMandatoryLabel,
+                    (uint)sizeof(TOKEN_MANDATORY_LABEL)
+                    ))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "SetTokenInformation failed");
+                }
+
+                Program.PrintColorMessage($"Successfully set low integrity for {Process.ProcessName} (PID: {Process.Id})", ConsoleColor.Green);
+            }
+            catch (Exception ex)
+            {
+                Program.PrintColorMessage($"Error setting integrity: {ex.Message}", ConsoleColor.Red);
+            }
+            finally
+            {
+                if (!tokenHandle.IsNull)
+                    PInvoke.CloseHandle(tokenHandle);
+
+                if (!processHandle.IsNull)
+                    PInvoke.CloseHandle(processHandle);
+            }
         }
     }
 }

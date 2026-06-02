@@ -193,14 +193,6 @@ PhCopyListView(
 PHAPPAPI
 VOID
 NTAPI
-PhCopyIListView(
-    _In_ HWND ListViewHandle,
-    _In_ IListView* ListView
-    );
-
-PHAPPAPI
-VOID
-NTAPI
 PhHandleListViewNotifyForCopy(
     _In_ LPARAM lParam,
     _In_ HWND ListViewHandle
@@ -227,14 +219,6 @@ PhGetListViewContextMenuPoint(
     _Out_ PPOINT Point
     );
 
-PHAPPAPI
-BOOLEAN
-NTAPI
-PhGetIListViewContextMenuPoint(
-    _In_ IListView* ListView,
-    _Out_ PPOINT Point
-    );
-
 // end_phapppub
 
 VOID PhSetWindowOpacity(
@@ -249,14 +233,14 @@ VOID PhSetWindowOpacity(
 PHAPPAPI
 PPH_STRING
 NTAPI
-PhGetPhVersion(
+PhGetBuildVersion(
     VOID
     );
 
 PHAPPAPI
 VOID
 NTAPI
-PhGetPhVersionNumbers(
+PhGetBuildVersionNumbers(
     _Out_opt_ PULONG MajorVersion,
     _Out_opt_ PULONG MinorVersion,
     _Out_opt_ PULONG BuildNumber,
@@ -266,7 +250,13 @@ PhGetPhVersionNumbers(
 PHAPPAPI
 PPH_STRING
 NTAPI
-PhGetPhVersionHash(
+PhGetBuildCommit(
+    VOID
+    );
+
+PPH_STRING
+NTAPI
+PhGetBuildTime(
     VOID
     );
 
@@ -282,14 +272,14 @@ typedef enum _PH_RELEASE_CHANNEL
 PHAPPAPI
 PH_RELEASE_CHANNEL
 NTAPI
-PhGetPhReleaseChannel(
+PhGetBuildReleaseChannel(
     VOID
     );
 
 PHAPPAPI
 PCWSTR
 NTAPI
-PhGetPhReleaseChannelString(
+PhGetBuildReleaseChannelString(
     VOID
     );
 
@@ -309,7 +299,7 @@ NTAPI
 PhShellProcessHacker(
     _In_opt_ HWND WindowHandle,
     _In_opt_ PCWSTR Parameters,
-    _In_ ULONG ShowWindowType,
+    _In_ LONG ShowWindowType,
     _In_ ULONG Flags,
     _In_ ULONG AppFlags,
     _In_opt_ ULONG Timeout,
@@ -321,7 +311,7 @@ NTSTATUS PhShellProcessHackerEx(
     _In_opt_ HWND WindowHandle,
     _In_opt_ PCWSTR FileName,
     _In_opt_ PCWSTR Parameters,
-    _In_ ULONG ShowWindowType,
+    _In_ LONG ShowWindowType,
     _In_ ULONG Flags,
     _In_ ULONG AppFlags,
     _In_opt_ ULONG Timeout,
@@ -481,7 +471,6 @@ PhHandleCopyCellEMenuItem(
 typedef struct _PH_COPY_ITEM_CONTEXT
 {
     HWND ListViewHandle;
-    IListView* ListViewClass;
     ULONG Id;
     ULONG SubId;
     PPH_STRING MenuItemText;
@@ -494,16 +483,6 @@ PhInsertCopyListViewEMenuItem(
     _In_ PPH_EMENU_ITEM Menu,
     _In_ ULONG InsertAfterId,
     _In_ HWND ListViewHandle
-    );
-
-PHAPPAPI
-BOOLEAN
-NTAPI
-PhInsertCopyIListViewEMenuItem(
-    _In_ PPH_EMENU_ITEM Menu,
-    _In_ ULONG InsertAfterId,
-    _In_ HWND ListViewHandle,
-    _In_ IListView* ListView
     );
 
 PHAPPAPI
@@ -548,15 +527,8 @@ PHAPPAPI
 HICON
 NTAPI
 PhGetApplicationIcon(
-    _In_ BOOLEAN SmallIcon
-    );
-
-PHAPPAPI
-HICON
-NTAPI
-PhGetApplicationIconEx(
     _In_ BOOLEAN SmallIcon,
-    _In_opt_ LONG WindowDpi
+    _In_ LONG WindowDpi
     );
 
 PHAPPAPI

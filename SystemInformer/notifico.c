@@ -73,7 +73,7 @@ VOID PhNfLoadSettings(
     PPH_STRING settingsString;
     PH_STRINGREF remaining;
 
-    settingsString = PhGetStringSetting(L"IconSettings");
+    settingsString = PhGetStringSetting(SETTING_ICON_SETTINGS);
 
     if (PhIsNullOrEmptyString(settingsString))
         return;
@@ -172,7 +172,7 @@ VOID PhNfSaveSettings(
         PhRemoveEndStringBuilder(&iconListBuilder, 1);
 
     settingsString = PhFinalStringBuilderString(&iconListBuilder);
-    PhSetStringSetting2(L"IconSettings", &settingsString->sr);
+    PhSetStringSetting2(SETTING_ICON_SETTINGS, &settingsString->sr);
     PhDereferenceObject(settingsString);
 }
 
@@ -184,7 +184,7 @@ VOID PhNfLoadGuids(
     PH_STRINGREF remaining;
     ULONG i;
 
-    settingsString = PhGetStringSetting(L"IconTrayGuids");
+    settingsString = PhGetStringSetting(SETTING_ICON_TRAY_GUIDS);
 
     if (PhIsNullOrEmptyString(settingsString))
     {
@@ -212,7 +212,7 @@ VOID PhNfLoadGuids(
             PhRemoveEndStringBuilder(&iconListBuilder, 1);
 
         PhMoveReference(&settingsString, PhFinalStringBuilderString(&iconListBuilder));
-        PhSetStringSetting2(L"IconTrayGuids", &settingsString->sr);
+        PhSetStringSetting2(SETTING_ICON_TRAY_GUIDS, &settingsString->sr);
         PhDereferenceObject(settingsString);
     }
     else
@@ -269,7 +269,7 @@ VOID PhNfCreateIconThreadDelayed(
             &PhpTrayIconEventHandle,
             EVENT_ALL_ACCESS,
             SynchronizationEvent,
-            !PhGetIntegerSetting(L"IconTrayLazyStartDelay")
+            !PhGetIntegerSetting(SETTING_ICON_TRAY_LAZY_START_DELAY)
             )))
         {
             // Set the event when the only icon is the static icon. (dmex)
@@ -322,6 +322,7 @@ PPH_NF_ICON PhNfRegisterIcon(
     return icon;
 }
 
+_Function_class_(PH_REGISTER_TRAY_ICON)
 PPH_NF_ICON PhNfPluginRegisterIcon(
     _In_ PPH_PLUGIN Plugin,
     _In_ ULONG SubId,
@@ -348,9 +349,9 @@ VOID PhNfLoadStage2(
     VOID
     )
 {
-    PhNfMiniInfoEnabled = !!PhGetIntegerSetting(L"MiniInfoWindowEnabled");
-    PhNfTransparencyEnabled = !!PhGetIntegerSetting(L"IconTransparencyEnabled");
-    PhNfPersistTrayIconPositionEnabled = !!PhGetIntegerSetting(L"IconTrayPersistGuidEnabled");
+    PhNfMiniInfoEnabled = !!PhGetIntegerSetting(SETTING_MINI_INFO_WINDOW_ENABLED);
+    PhNfTransparencyEnabled = !!PhGetIntegerSetting(SETTING_ICON_TRANSPARENCY_ENABLED);
+    PhNfPersistTrayIconPositionEnabled = !!PhGetIntegerSetting(SETTING_ICON_TRAY_PERSIST_GUID_ENABLED);
 
     if (PhNfPersistTrayIconPositionEnabled)
     {
@@ -474,7 +475,7 @@ VOID PhNfForwardMessage(
     {
     case WM_LBUTTONDOWN:
         {
-            if (PhGetIntegerSetting(L"IconSingleClick"))
+            if (PhGetIntegerSetting(SETTING_ICON_SINGLE_CLICK))
             {
                 SystemInformer_IconClick();
                 PhNfpDisableHover();
@@ -487,7 +488,7 @@ VOID PhNfForwardMessage(
         break;
     case WM_LBUTTONUP:
         {
-            if (!PhGetIntegerSetting(L"IconSingleClick") && PhNfMiniInfoEnabled && IconClickUpDueToDown)
+            if (!PhGetIntegerSetting(SETTING_ICON_SINGLE_CLICK) && PhNfMiniInfoEnabled && IconClickUpDueToDown)
             {
                 PH_NF_MSG_SHOWMINIINFOSECTION_DATA showMiniInfoSectionData;
 
@@ -517,7 +518,7 @@ VOID PhNfForwardMessage(
         break;
     case WM_LBUTTONDBLCLK:
         {
-            if (!PhGetIntegerSetting(L"IconSingleClick"))
+            if (!PhGetIntegerSetting(SETTING_ICON_SINGLE_CLICK))
             {
                 if (PhNfMiniInfoEnabled)
                 {
@@ -537,14 +538,14 @@ VOID PhNfForwardMessage(
         {
             POINT location;
 
-            if (!PhGetIntegerSetting(L"IconSingleClick") && PhNfMiniInfoEnabled)
+            if (!PhGetIntegerSetting(SETTING_ICON_SINGLE_CLICK) && PhNfMiniInfoEnabled)
                 PhKillTimer(WindowHandle, TIMER_ICON_CLICK_ACTIVATE);
 
             PhNfpIconDisablePopupHoverWin11Workaround();
 
             PhPinMiniInformation(MiniInfoIconPinType, -1, 0, 0, NULL, NULL);
             GetCursorPos(&location);
-            PhShowIconContextMenu(WindowHandle, location);
+            PhShowIconContextMenu(WindowHandle, &location);
         }
         break;
     case NIN_KEYSELECT:
@@ -556,7 +557,7 @@ VOID PhNfForwardMessage(
         break;
     case NIN_BALLOONUSERCLICK:
         {
-            if (!PhGetIntegerSetting(L"IconIgnoreBalloonClick"))
+            if (!PhGetIntegerSetting(SETTING_ICON_IGNORE_BALLOON_CLICK))
                 PhShowDetailsForIconNotification();
         }
         break;
@@ -645,6 +646,7 @@ VOID PhNfSetVisibleIcon(
 #endif
 }
 
+_Function_class_(PH_TOAST_CALLBACK)
 VOID NTAPI PhpToastCallback(
     _In_ HRESULT Result,
     _In_ PH_TOAST_REASON Reason,
@@ -672,7 +674,7 @@ HRESULT PhpShowToastNotification(
     PPH_STRING toastXml;
     PH_FORMAT format[7];
 
-    if (!Force && !PhGetIntegerSetting(L"ToastNotifyEnabled"))
+    if (!Force && !PhGetIntegerSetting(SETTING_TOAST_NOTIFY_ENABLED))
         return E_FAIL;
 
     if (PhBeginInitOnce(&initOnce))
@@ -782,9 +784,9 @@ BOOLEAN PhNfpShowBalloonTip(
     wcsncpy_s(notifyIcon.szInfo, RTL_NUMBER_OF(notifyIcon.szInfo), Text, _TRUNCATE);
     notifyIcon.uTimeout = Timeout;
 
-    if (PhGetIntegerSetting(L"IconBalloonShowIcon") || WindowsVersion < WINDOWS_11)
+    if (PhGetIntegerSetting(SETTING_ICON_BALLOON_SHOW_ICON) || WindowsVersion < WINDOWS_11)
         SetFlag(notifyIcon.dwInfoFlags, NIIF_INFO);
-    if (PhGetIntegerSetting(L"IconBalloonMuteSound"))
+    if (PhGetIntegerSetting(SETTING_ICON_BALLOON_MUTE_SOUND))
         SetFlag(notifyIcon.dwInfoFlags, NIIF_NOSOUND);
 
     PhShellNotifyIcon(NIM_MODIFY, &notifyIcon);
@@ -936,7 +938,7 @@ BOOLEAN PhNfIconsEnabled(
 
     PPH_STRING settingsString;
 
-    settingsString = PhGetStringSetting(L"IconSettings");
+    settingsString = PhGetStringSetting(SETTING_ICON_SETTINGS);
 
     if (PhIsNullOrEmptyString(settingsString))
     {
@@ -989,7 +991,7 @@ HICON PhNfGetApplicationIcon(
             DpiValue = PhGetTaskbarDpi();
         }
 
-        PhNfAppTrayIcon = PhGetApplicationIconEx(FALSE, DpiValue);
+        PhNfAppTrayIcon = PhGetApplicationIcon(FALSE, DpiValue);
     }
 
     return PhNfAppTrayIcon;
@@ -1003,6 +1005,7 @@ HICON PhNfpGetBlackIcon(
     {
         ULONG width;
         ULONG height;
+        SIZE_T bitsSize;
         PVOID bits;
         HDC hdc;
         HBITMAP mask;
@@ -1010,12 +1013,20 @@ HICON PhNfpGetBlackIcon(
         ICONINFO iconInfo;
 
         PhNfpBeginBitmap2(&PhNfpBlackBitmapContext, &width, &height, &PhNfpBlackBitmap, &bits, &hdc, &oldBitmap);
-        memset(bits, PhNfTransparencyEnabled ? 1 : 0, width * height * sizeof(RGBQUAD));
+
+        if (!NT_SUCCESS(RtlSizeTMult(width, height, &bitsSize)) ||
+            !NT_SUCCESS(RtlSizeTMult(bitsSize, sizeof(RGBQUAD), &bitsSize)))
+        {
+            SelectBitmap(hdc, oldBitmap);
+            return NULL;
+        }
+
+        memset(bits, PhNfTransparencyEnabled ? 1 : 0, bitsSize);
 
         // Create a monochrome mask bitmap for the icon.
         if (!(mask = CreateBitmap(width, height, 1, 1, NULL)))
             return NULL;
-        
+
         iconInfo.fIcon = TRUE;
         iconInfo.xHotspot = 0;
         iconInfo.yHotspot = 0;
@@ -1115,7 +1126,7 @@ HFONT PhNfGetTrayIconFont(
         }
 
         PhNfTrayIconFont = CreateFont(
-            PhGetDpi(-11, DpiValue),
+            PhScaleToDisplay(-11, DpiValue),
             0,
             0,
             0,
@@ -1163,7 +1174,7 @@ BOOLEAN PhNfpAddNotifyIcon(
         _TRUNCATE
         );
     //notifyIcon.hIcon = PhNfpGetBlackIcon();
-    notifyIcon.hIcon = PhGetApplicationIcon(TRUE); // Fixes GH#1845 (dmex)
+    notifyIcon.hIcon = PhNfGetApplicationIcon(0); // Fixes GH#1845 (dmex)
 
     if (!PhNfMiniInfoEnabled || PhNfMiniInfoPinned || FlagOn(Icon->Flags, PH_NF_ICON_NOSHOW_MINIINFO))
         SetFlag(notifyIcon.uFlags, NIF_SHOWTIP);
@@ -1395,7 +1406,8 @@ VOID PhNfpProcessesUpdatedHandler(
     _In_opt_ PVOID Context
     )
 {
-    ULONG runCount = PtrToUlong(Parameter);
+    PPH_PROVIDER_UPDATED_EVENT updateEvent = Parameter;
+    ULONG runCount = updateEvent->RunCount;
 
     // Update the icons on a separate thread so we don't block the main window
     // or provider threads when explorer is not responding. (dmex)
@@ -1466,7 +1478,7 @@ VOID PhNfpUpdateRegisteredIcon(
         PhDereferenceObject(newText);
 }
 
-_Function_class_(PH_NF_ICON_UPDATE_CALLBACK)
+_Function_class_(PH_NF_BEGIN_BITMAP)
 VOID PhNfpBeginBitmap(
     _Out_ PULONG Width,
     _Out_ PULONG Height,
@@ -1492,12 +1504,19 @@ VOID PhNfpBeginBitmap2(
 {
     LONG dpiValue = PhGetTaskbarDpi();
 
+    *Width = 0;
+    *Height = 0;
+    *Bitmap = NULL;
+    if (Bits) *Bits = NULL;
+    *Hdc = NULL;
+    *OldBitmap = NULL;
+
     // Initialize and cache the current system metrics. (dmex)
 
     if (Context->TaskbarDpi == 0 || Context->TaskbarDpi != dpiValue)
     {
         Context->Width = PhGetSystemMetrics(SM_CXSMICON, dpiValue);
-        Context->Height = PhGetSystemMetrics(SM_CXSMICON, dpiValue);
+        Context->Height = PhGetSystemMetrics(SM_CYSMICON, dpiValue);
 
         // Re-initialize fonts with updated DPI (only when there's an existing handle). (dmex)
         //PhNfGetTrayIconFont(dpiValue);
@@ -1565,6 +1584,10 @@ VOID PhNfpCpuHistoryIconUpdateCallback(
     _In_opt_ PVOID Context
     )
 {
+    *NewIconOrBitmap = NULL;
+    *Flags = 0;
+    *NewText = NULL;
+
     static PH_GRAPH_DRAW_INFO drawInfo =
     {
         16,
@@ -1665,6 +1688,10 @@ VOID PhNfpIoHistoryIconUpdateCallback(
     _In_opt_ PVOID Context
     )
 {
+    *NewIconOrBitmap = NULL;
+    *Flags = 0;
+    *NewText = NULL;
+
     static PH_GRAPH_DRAW_INFO drawInfo =
     {
         16,
@@ -1781,6 +1808,10 @@ VOID PhNfpCommitHistoryIconUpdateCallback(
     _In_opt_ PVOID Context
     )
 {
+    *NewIconOrBitmap = NULL;
+    *Flags = 0;
+    *NewText = NULL;
+
     static PH_GRAPH_DRAW_INFO drawInfo =
     {
         16,
@@ -1862,6 +1893,10 @@ VOID PhNfpPhysicalHistoryIconUpdateCallback(
     _In_opt_ PVOID Context
     )
 {
+    *NewIconOrBitmap = NULL;
+    *Flags = 0;
+    *NewText = NULL;
+
     static PH_GRAPH_DRAW_INFO drawInfo =
     {
         16,
@@ -2527,7 +2562,7 @@ BOOLEAN PhNfpGetShowMiniInfoSectionData(
 }
 
 VOID PhNfpIconClickActivateTimerProc(
-    _In_ HWND hwnd,
+    _In_ HWND WindowHandle,
     _In_ UINT uMsg,
     _In_ UINT_PTR idEvent,
     _In_ ULONG dwTime
@@ -2548,7 +2583,7 @@ VOID PhNfpDisableHover(
 }
 
 VOID PhNfpIconRestoreHoverTimerProc(
-    _In_ HWND hwnd,
+    _In_ HWND WindowHandle,
     _In_ UINT uMsg,
     _In_ UINT_PTR idEvent,
     _In_ ULONG dwTime
@@ -2572,7 +2607,7 @@ VOID PhNfpIconDisablePopupHoverWin11Workaround(
 }
 
 VOID PhNfpIconShowPopupHoverTimerProc(
-    _In_ HWND hwnd,
+    _In_ HWND WindowHandle,
     _In_ UINT uMsg,
     _In_ UINT_PTR idEvent,
     _In_ ULONG dwTime

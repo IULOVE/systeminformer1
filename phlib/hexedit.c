@@ -113,7 +113,7 @@ LRESULT CALLBACK PhpHexEditWndProc(
             context->WindowDpi = PhGetWindowDpi(hwnd);
 
             context->Font = CreateFont(
-                -(LONG)PhGetDpi(12, context->WindowDpi),
+                -(LONG)PhScaleToDisplay(12, context->WindowDpi),
                 0,
                 0,
                 0,
@@ -273,7 +273,7 @@ LRESULT CALLBACK PhpHexEditWndProc(
 
                 if (!PhGetSystemParametersInfo(SPI_GETWHEELSCROLLLINES, 0, &wheelScrollLines, 0))
                 {
-                    wheelScrollLines = PhGetDpi(3, context->WindowDpi);
+                    wheelScrollLines = PhScaleToDisplay(3, context->WindowDpi);
                 }
 
                 context->TopIndex += context->BytesPerRow * (LONG)wheelScrollLines * -wheelDelta / WHEEL_DELTA;
@@ -402,7 +402,7 @@ LRESULT CALLBACK PhpHexEditWndProc(
 
                 GetClientRect(hwnd, &rect);
 
-                if (!PhPtInRect(&rect, cursorPos))
+                if (!PhPtInRect(&rect, &cursorPos))
                 {
                     if (cursorPos.y < 0)
                     {
@@ -1034,7 +1034,7 @@ VOID PhpHexEditUpdateMetrics(
 
         if (Context->LinesPerPage * Context->BytesPerRow > Context->Length)
         {
-            Context->LinesPerPage = (Context->Length + Context->BytesPerRow / 2) / Context->BytesPerRow;
+            Context->LinesPerPage = PhMultiplyDivideSigned(Context->Length, 1, Context->BytesPerRow);
 
             if (Context->Length % Context->BytesPerRow != 0)
             {
@@ -1404,7 +1404,7 @@ VOID PhpHexEditRepositionCaret(
 
     GetClientRect(hwnd, &rect);
 
-    if (PhPtInRect(&rect, Context->EditPosition))
+    if (PhPtInRect(&rect, &Context->EditPosition))
     {
         SetCaretPos(Context->EditPosition.x, Context->EditPosition.y);
         ShowCaret(hwnd);

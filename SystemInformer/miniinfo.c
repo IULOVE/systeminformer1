@@ -103,11 +103,11 @@ VOID PhPinMiniInformation(
             if ((windowAtom = PhMipContainerInitializeWindowClass()) == INVALID_ATOM)
                 return;
 
-            PhMipContainerWindow = CreateWindowEx(
-                WS_EX_TOOLWINDOW,
+            PhMipContainerWindow = PhCreateWindowEx(
                 MAKEINTATOM(windowAtom),
                 NULL,
                 WS_BORDER | WS_THICKFRAME | WS_POPUP,
+                WS_EX_TOOLWINDOW,
                 0,
                 0,
                 400,
@@ -130,7 +130,7 @@ VOID PhPinMiniInformation(
             if (PhGetIntegerSetting(SETTING_MINI_INFO_WINDOW_PINNED))
                 PhMipSetPinned(TRUE, TRUE);
 
-            PhMipRefreshAutomatically = PhGetIntegerSetting(L"MiniInfoWindowRefreshAutomatically");
+            PhMipRefreshAutomatically = PhGetIntegerSetting(SETTING_MINI_INFO_WINDOW_REFRESH_AUTOMATICALLY);
 
             opacity = PhGetIntegerSetting(SETTING_MINI_INFO_WINDOW_OPACITY);
 
@@ -144,7 +144,12 @@ VOID PhPinMiniInformation(
             MapDialogRect(PhMipWindow, &MinimumSize);
         }
 
-        if (!(Flags & PH_MINIINFO_LOAD_POSITION))
+        if ((Flags & PH_MINIINFO_LOAD_POSITION) && PhValidWindowPlacementFromSetting(SETTING_MINI_INFO_WINDOW_POSITION))
+        {
+            PhLoadWindowPlacementFromSetting(SETTING_MINI_INFO_WINDOW_POSITION, SETTING_MINI_INFO_WINDOW_SIZE, PhMipContainerWindow);
+            SetWindowPos(PhMipContainerWindow, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
+        }
+        else
         {
             PhMipCalculateWindowRectangle(&PhMipSourcePoint, &windowRectangle);
             SetWindowPos(
@@ -156,11 +161,6 @@ VOID PhPinMiniInformation(
                 windowRectangle.Height,
                 SWP_NOACTIVATE
                 );
-        }
-        else
-        {
-            PhLoadWindowPlacementFromSetting(L"MiniInfoWindowPosition", L"MiniInfoWindowSize", PhMipContainerWindow);
-            SetWindowPos(PhMipContainerWindow, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
         }
 
         PhInitializeWindowTheme(PhMipContainerWindow, PhEnableThemeSupport);
@@ -321,11 +321,14 @@ RTL_ATOM PhMipContainerInitializeWindowClass(
 
     memset(&wcex, 0, sizeof(WNDCLASSEX));
     wcex.cbSize = sizeof(WNDCLASSEX);
+    wcex.style = CS_DBLCLKS | CS_GLOBALCLASS;
     wcex.lpfnWndProc = PhMipContainerWndProc;
-    wcex.hInstance = PhInstanceHandle;
-    name = PhaGetStringSetting(L"MiniInfoContainerClassName");
-    wcex.lpszClassName = PhGetStringOrDefault(name, L"MiniInfoContainerClassName");
+    wcex.cbClsExtra = 0;
+    wcex.cbWndExtra = sizeof(PVOID);
+    wcex.hInstance = NtCurrentImageBase();
     wcex.hCursor = PhLoadCursor(NULL, IDC_ARROW);
+    name = PhaGetStringSetting(SETTING_MINI_INFO_CONTAINER_CLASS_NAME);
+    wcex.lpszClassName = PhGetStringOrDefault(name, SETTING_MINI_INFO_CONTAINER_CLASS_NAME);
 
     return RegisterClassEx(&wcex);
 }
@@ -371,7 +374,7 @@ VOID PhMipContainerOnShowWindow(
             PhMipMessageLoopFilterEntry = NULL;
         }
 
-        PhSaveWindowPlacementToSetting(L"MiniInfoWindowPosition", L"MiniInfoWindowSize", PhMipContainerWindow);
+        PhSaveWindowPlacementToSetting(SETTING_MINI_INFO_WINDOW_POSITION, SETTING_MINI_INFO_WINDOW_SIZE, PhMipContainerWindow);
     }
 
     if (SectionList)
@@ -422,7 +425,7 @@ VOID PhMipContainerOnExitSizeMove(
     VOID
     )
 {
-    PhSaveWindowPlacementToSetting(L"MiniInfoWindowPosition", L"MiniInfoWindowSize", PhMipContainerWindow);
+    PhSaveWindowPlacementToSetting(SETTING_MINI_INFO_WINDOW_POSITION, SETTING_MINI_INFO_WINDOW_SIZE, PhMipContainerWindow);
 }
 
 BOOLEAN PhMipContainerOnEraseBkgnd(
@@ -555,7 +558,7 @@ BOOLEAN PhMipOnNotify(
 _Success_(return)
 BOOLEAN PhMipOnCtlColorXxx(
     _In_ ULONG Message,
-    _In_ HWND hwnd,
+    _In_ HWND WindowHandle,
     _In_ HDC hdc,
     _Out_ HBRUSH *Brush
     )
@@ -597,6 +600,7 @@ VOID PhMipOnUserMessage(
     }
 }
 
+_Function_class_(PH_MESSAGE_LOOP_FILTER)
 BOOLEAN PhMipMessageLoopFilter(
     _In_ PMSG Message,
     _In_ PVOID Context
@@ -695,7 +699,7 @@ VOID PhMipCalculateWindowRectangle(
     PH_RECTANGLE point;
     MONITORINFO monitorInfo = { sizeof(monitorInfo) };
 
-    PhLoadWindowPlacementFromSetting(NULL, L"MiniInfoWindowSize", PhMipContainerWindow);
+    PhLoadWindowPlacementFromSetting(NULL, SETTING_MINI_INFO_WINDOW_SIZE, PhMipContainerWindow);
     PhGetWindowRect(PhMipContainerWindow, &windowRect);
     SendMessage(PhMipContainerWindow, WM_SIZING, WMSZ_BOTTOMRIGHT, (LPARAM)&windowRect); // Adjust for the minimum size.
     PhRectToRectangle(&windowRectangle, &windowRect);
@@ -786,7 +790,7 @@ VOID PhMipInitializeParameters(
 
     hdc = GetDC(PhMipWindow);
 
-    logFont.lfHeight -= PhMultiplyDivide(2, dpiValue, 72);
+    logFont.lfHeight -= PhMultiplyDivideSigned(2, dpiValue, 72);
     CurrentParameters.MediumFont = CreateFontIndirect(&logFont);
 
     originalFont = SelectFont(hdc, CurrentParameters.Font);
@@ -805,6 +809,7 @@ VOID PhMipInitializeParameters(
     ReleaseDC(PhMipWindow, hdc);
 }
 
+_Function_class_(PH_MINIINFO_CREATE_SECTION)
 PPH_MINIINFO_SECTION PhMipCreateSection(
     _In_ PPH_MINIINFO_SECTION Template
     )
@@ -835,6 +840,7 @@ VOID PhMipDestroySection(
     PhFree(Section);
 }
 
+_Function_class_(PH_MINIINFO_FIND_SECTION)
 PPH_MINIINFO_SECTION PhMipFindSection(
     _In_ PPH_STRINGREF Name
     )
@@ -926,6 +932,7 @@ VOID PhMipChangeSection(
     NewSection->Callback(NewSection, MiniInfoTick, NULL, NULL);
 }
 
+_Function_class_(PH_MINIINFO_SET_SECTION_TEXT)
 VOID PhMipSetSectionText(
     _In_ struct _PH_MINIINFO_SECTION *Section,
     _In_opt_ PPH_STRING Text
@@ -1042,7 +1049,7 @@ VOID PhMipToggleRefreshAutomatically(
     )
 {
     PhMipRefreshAutomatically ^= MIP_REFRESH_AUTOMATICALLY_FLAG(PhMipPinned);
-    PhSetIntegerSetting(L"MiniInfoWindowRefreshAutomatically", PhMipRefreshAutomatically);
+    PhSetIntegerSetting(SETTING_MINI_INFO_WINDOW_REFRESH_AUTOMATICALLY, PhMipRefreshAutomatically);
 }
 
 VOID PhMipSetPinned(
@@ -1196,7 +1203,7 @@ VOID PhMipShowOptionsMenu(
 }
 
 LRESULT CALLBACK PhMipSectionControlHookWndProc(
-    _In_ HWND hwnd,
+    _In_ HWND WindowHandle,
     _In_ UINT uMsg,
     _In_ WPARAM wParam,
     _In_ LPARAM lParam
@@ -1204,15 +1211,15 @@ LRESULT CALLBACK PhMipSectionControlHookWndProc(
 {
     WNDPROC oldWndProc;
 
-    if (!(oldWndProc = PhGetWindowContext(hwnd, 0xF)))
-        return DefWindowProc(hwnd, uMsg, wParam, lParam);
+    if (!(oldWndProc = PhGetWindowContext(WindowHandle, 0xF)))
+        return DefWindowProc(WindowHandle, uMsg, wParam, lParam);
 
     switch (uMsg)
     {
     case WM_DESTROY:
         {
-            PhSetWindowProcedure(hwnd, oldWndProc);
-            PhRemoveWindowContext(hwnd, 0xF);
+            PhSetWindowProcedure(WindowHandle, oldWndProc);
+            PhRemoveWindowContext(WindowHandle, 0xF);
         }
         break;
     case WM_SETCURSOR:
@@ -1222,7 +1229,7 @@ LRESULT CALLBACK PhMipSectionControlHookWndProc(
         return TRUE;
     }
 
-    return CallWindowProc(oldWndProc, hwnd, uMsg, wParam, lParam);
+    return CallWindowProc(oldWndProc, WindowHandle, uMsg, wParam, lParam);
 }
 
 PPH_MINIINFO_LIST_SECTION PhMipCreateListSection(
@@ -1262,6 +1269,7 @@ PPH_MINIINFO_LIST_SECTION PhMipCreateInternalListSection(
     return PhMipCreateListSection(Name, Flags, &listSection);
 }
 
+_Function_class_(PH_MINIINFO_SECTION_CALLBACK)
 BOOLEAN PhMipListSectionCallback(
     _In_ PPH_MINIINFO_SECTION Section,
     _In_ PH_MINIINFO_SECTION_MESSAGE Message,
@@ -1482,18 +1490,18 @@ VOID PhMipClearListSection(
 }
 
 LONG PhMipCalculateRowHeight(
-    _In_ HWND hwnd
+    _In_ HWND WindowHandle
     )
 {
     LONG iconHeight;
     LONG titleAndSubtitleHeight;
     LONG dpiValue;
 
-    dpiValue = PhGetWindowDpi(hwnd);
+    dpiValue = PhGetWindowDpi(WindowHandle);
 
-    iconHeight = PhGetDpi(MIP_ICON_PADDING + MIP_CELL_PADDING, dpiValue) + PhGetSystemMetrics(SM_CXICON, dpiValue);
+    iconHeight = PhScaleToDisplay(MIP_ICON_PADDING + MIP_CELL_PADDING, dpiValue) + PhGetSystemMetrics(SM_CXICON, dpiValue);
     titleAndSubtitleHeight =
-        PhGetDpi(MIP_CELL_PADDING, dpiValue) * 2 + CurrentParameters.FontHeight + PhGetDpi(MIP_INNER_PADDING, dpiValue) + CurrentParameters.FontHeight;
+        PhScaleToDisplay(MIP_CELL_PADDING, dpiValue) * 2 + CurrentParameters.FontHeight + PhScaleToDisplay(MIP_INNER_PADDING, dpiValue) + CurrentParameters.FontHeight;
 
     return max(iconHeight, titleAndSubtitleHeight);
 }
@@ -1540,7 +1548,7 @@ VOID PhMipDestroyGroupNode(
 }
 
 BOOLEAN PhMipListSectionTreeNewCallback(
-    _In_ HWND hwnd,
+    _In_ HWND WindowHandle,
     _In_ PH_TREENEW_MESSAGE Message,
     _In_opt_ PVOID Parameter1,
     _In_opt_ PVOID Parameter2,
@@ -1594,13 +1602,13 @@ BOOLEAN PhMipListSectionTreeNewCallback(
             LONG iconPadding;
             LONG cellPadding;
 
-            dpiValue = PhGetWindowDpi(hwnd);
+            dpiValue = PhGetWindowDpi(WindowHandle);
 
             width = PhGetSystemMetrics(SM_CXICON, dpiValue);
             height = PhGetSystemMetrics(SM_CYICON, dpiValue);
 
-            iconPadding = PhGetDpi(MIP_ICON_PADDING, dpiValue);
-            cellPadding = PhGetDpi(MIP_CELL_PADDING, dpiValue);
+            iconPadding = PhScaleToDisplay(MIP_ICON_PADDING, dpiValue);
+            cellPadding = PhScaleToDisplay(MIP_CELL_PADDING, dpiValue);
 
             rect.left += iconPadding;
             rect.top += iconPadding;
@@ -2063,6 +2071,7 @@ VOID PhMipHandleListSectionCommand(
     }
 }
 
+_Function_class_(PH_MINIINFO_LIST_SECTION_CALLBACK)
 BOOLEAN PhMipCpuListSectionCallback(
     _In_ PPH_MINIINFO_LIST_SECTION ListSection,
     _In_ PH_MINIINFO_LIST_SECTION_MESSAGE Message,
@@ -2195,6 +2204,7 @@ int __cdecl PhMipCpuListSectionNodeCompareFunction(
     return singlecmp(*(PFLOAT)data2->UserData, *(PFLOAT)data1->UserData);
 }
 
+_Function_class_(PH_MINIINFO_LIST_SECTION_CALLBACK)
 BOOLEAN PhMipCommitListSectionCallback(
     _In_ PPH_MINIINFO_LIST_SECTION ListSection,
     _In_ PH_MINIINFO_LIST_SECTION_MESSAGE Message,
@@ -2304,6 +2314,7 @@ int __cdecl PhMipCommitListSectionNodeCompareFunction(
     return uint64cmp(*(PULONG64)data2->UserData, *(PULONG64)data1->UserData);
 }
 
+_Function_class_(PH_MINIINFO_LIST_SECTION_CALLBACK)
 BOOLEAN PhMipPhysicalListSectionCallback(
     _In_ PPH_MINIINFO_LIST_SECTION ListSection,
     _In_ PH_MINIINFO_LIST_SECTION_MESSAGE Message,
@@ -2415,6 +2426,7 @@ int __cdecl PhMipPhysicalListSectionNodeCompareFunction(
     return uint64cmp(*(PULONG64)data2->UserData, *(PULONG64)data1->UserData);
 }
 
+_Function_class_(PH_MINIINFO_LIST_SECTION_CALLBACK)
 BOOLEAN PhMipIoListSectionCallback(
     _In_ PPH_MINIINFO_LIST_SECTION ListSection,
     _In_ PH_MINIINFO_LIST_SECTION_MESSAGE Message,

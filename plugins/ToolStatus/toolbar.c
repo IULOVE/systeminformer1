@@ -126,7 +126,7 @@ VOID RebarCreateOrUpdateWindow(
                 }
 
                 // Remove all buttons.
-                ToolbarRemoveButons();
+                ToolbarRemoveButtons();
 
                 // Re-add/update buttons.
                 ToolbarLoadButtonSettings();
@@ -432,7 +432,7 @@ VOID ToolbarLoadSettings(
             case PHAPP_ID_VIEW_ALWAYSONTOP:
                 {
                     // Set the pressed state
-                    if (PhGetIntegerSetting(L"MainWindowAlwaysOnTop"))
+                    if (PhGetIntegerSetting(SETTING_MAIN_WINDOW_ALWAYS_ON_TOP))
                     {
                         SetFlag(buttonInfo.fsState, TBSTATE_PRESSED);
                     }
@@ -484,7 +484,7 @@ VOID ToolbarLoadSettings(
     InvalidateMainWindowLayout();
 }
 
-VOID ToolbarRemoveButons(
+VOID ToolbarRemoveButtons(
     VOID
     )
 {
@@ -499,14 +499,14 @@ VOID ToolbarResetSettings(
     )
 {
     // Remove all buttons.
-    ToolbarRemoveButons();
+    ToolbarRemoveButtons();
 
     // Add the default buttons.
     ToolbarLoadDefaultButtonSettings();
 }
 
 PWSTR ToolbarGetText(
-    _In_ UINT CommandID
+    _In_ ULONG CommandID
     )
 {
     switch (CommandID)
@@ -550,7 +550,7 @@ HBITMAP ToolbarLoadImageFromIcon(
 }
 
 HBITMAP ToolbarGetImage(
-    _In_ UINT CommandID,
+    _In_ ULONG CommandID,
     _In_ LONG DpiValue
     )
 {
@@ -753,8 +753,9 @@ VOID ToolbarLoadButtonSettings(
     VOID
     )
 {
-    INT count;
-    LONG64 countInteger;
+    ULONG count;
+    ULONG64 countInteger;
+    ULONG insertedCount = 0;
     PPH_STRING settingsString;
     PTBBUTTON buttonArray;
     PH_STRINGREF remaining;
@@ -778,30 +779,32 @@ VOID ToolbarLoadButtonSettings(
         goto CleanupExit;
     }
 
-    if (!PhStringToInteger64(&part, 10, &countInteger))
+    if (!PhStringToUInt64(&part, 10, &countInteger))
     {
         ToolbarLoadDefaultButtonSettings();
         goto CleanupExit;
     }
 
-    count = (INT)countInteger;
+    count = (ULONG)countInteger;
     dpiValue = SystemInformer_GetWindowDpi();
 
     // Allocate the button array
-    buttonArray = _malloca(count * sizeof(TBBUTTON));
+    buttonArray = PhAllocateStack(count * sizeof(TBBUTTON));
     if (!buttonArray) goto CleanupExit;
     memset(buttonArray, 0, count * sizeof(TBBUTTON));
 
-    for (INT index = 0; index < count; index++)
+    for (ULONG index = 0; index < count; index++)
     {
-        LONG64 commandInteger;
+        ULONG64 commandInteger;
         PH_STRINGREF commandIdPart;
 
         if (remaining.Length == 0)
             break;
 
         PhSplitStringRefAtChar(&remaining, L'|', &commandIdPart, &remaining);
-        PhStringToInteger64(&commandIdPart, 10, &commandInteger);
+
+        if (!PhStringToUInt64(&commandIdPart, 10, &commandInteger))
+            continue;
 
         buttonArray[index].idCommand = (INT)commandInteger;
         buttonArray[index].iBitmap = I_IMAGECALLBACK;
@@ -843,13 +846,15 @@ VOID ToolbarLoadButtonSettings(
                 break;
             }
         }
+
+        insertedCount++;
     }
 
-    ToolbarRemoveButons();
+    ToolbarRemoveButtons();
 
-    SendMessage(ToolBarHandle, TB_ADDBUTTONS, count, (LPARAM)buttonArray);
+    SendMessage(ToolBarHandle, TB_ADDBUTTONS, insertedCount, (LPARAM)buttonArray);
 
-    _freea(buttonArray);
+    PhFreeStack(buttonArray);
 
 CleanupExit:
     PhClearReference(&settingsString);
@@ -882,14 +887,14 @@ VOID ToolbarSaveButtonSettings(
             TBIF_BYINDEX | TBIF_IMAGE | TBIF_STYLE | TBIF_COMMAND
         };
 
-        if (SendMessage(ToolBarHandle, TB_GETBUTTONINFO, index, (LPARAM)&buttonInfo))
-        {
-            PhAppendFormatStringBuilder(
-                &stringBuilder,
-                L"%d|",
-                buttonInfo.idCommand
-                );
-        }
+        if (SendMessage(ToolBarHandle, TB_GETBUTTONINFO, index, (LPARAM)&buttonInfo) == INT_ERROR)
+            break;
+
+        PhAppendFormatStringBuilder(
+            &stringBuilder,
+            L"%d|",
+            buttonInfo.idCommand
+            );
     }
 
     if (stringBuilder.String->Length != 0)

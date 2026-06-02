@@ -40,10 +40,12 @@ typedef struct _DEVICE_TREE_SORT_CONTEXT
 } DEVICE_TREE_SORT_CONTEXT, *PDEVICE_TREE_SORT_CONTEXT;
 
 static BOOLEAN AutoRefreshDeviceTree = TRUE;
+static BOOLEAN ShowDeviceRootNode = FALSE;
 static BOOLEAN ShowDisconnected = TRUE;
 static BOOLEAN ShowSoftwareComponents = TRUE;
 static BOOLEAN ShowDeviceInterfaces = TRUE;
 static BOOLEAN ShowDisabledDeviceInterfaces = TRUE;
+static BOOLEAN SortNameDevices = FALSE;
 static BOOLEAN SortChildDevices = FALSE;
 static BOOLEAN SortRootDevices = FALSE;
 static BOOLEAN HighlightUpperFiltered = TRUE;
@@ -209,7 +211,6 @@ PDEVICE_NODE DeviceTreeCreateNode(
     HICON iconHandle;
 
     node = PhAllocateZero(sizeof(DEVICE_NODE));
-
     PhInitializeTreeNewNode(&node->Node);
     node->Node.TextCache = node->TextCache;
     node->Node.TextCacheSize = RTL_NUMBER_OF(node->TextCache);
@@ -238,8 +239,10 @@ PDEVICE_NODE DeviceTreeCreateNode(
             PhAddItemList(node->Children, DeviceTreeCreateNode(item, Nodes));
     }
 
-    if (PhGetIntegerSetting(SETTING_NAME_DEVICE_SORT_CHILDREN_BY_NAME))
+    if (SortNameDevices)
+    {
         qsort(node->Children->Items, node->Children->Count, sizeof(PVOID), DeviceListSortByNameFunction);
+    }
 
     PhAddItemList(Nodes, node);
     return node;
@@ -249,12 +252,14 @@ PDEVICE_TREE DeviceTreeCreate(
     _In_ PPH_DEVICE_TREE Tree
     )
 {
-    PDEVICE_TREE tree = PhCreateObject(sizeof(DEVICE_TREE), DeviceTreeType);
+    PDEVICE_TREE tree;
 
     PhTrace("Creating device tree...");
 
+    tree = PhCreateObject(sizeof(DEVICE_TREE), DeviceTreeType);
     tree->Nodes = PhCreateList(Tree->DeviceList->AllocatedCount);
-    if (PhGetIntegerSetting(SETTING_NAME_DEVICE_SHOW_ROOT))
+
+    if (ShowDeviceRootNode)
     {
         tree->Roots = PhCreateList(1);
         PhAddItemList(tree->Roots, DeviceTreeCreateNode(Tree->Root, tree->Nodes));
@@ -268,8 +273,10 @@ PDEVICE_TREE DeviceTreeCreate(
                 PhAddItemList(tree->Roots, DeviceTreeCreateNode(item, tree->Nodes));
         }
 
-        if (PhGetIntegerSetting(SETTING_NAME_DEVICE_SORT_CHILDREN_BY_NAME))
+        if (SortNameDevices)
+        {
             qsort(tree->Roots->Items, tree->Roots->Count, sizeof(PVOID), DeviceListSortByNameFunction);
+        }
     }
 
     qsort(tree->Nodes->Items, tree->Nodes->Count, sizeof(PVOID), DeviceNodeSortFunction);
@@ -374,10 +381,10 @@ VOID NTAPI DeviceTreePublish(
 
     TreeNew_SetRedraw(DeviceTreeHandle, TRUE);
 
-    TreeNew_NodesStructured(DeviceTreeHandle);
-
     if (DeviceTreeFilterSupport.FilterList)
         PhApplyTreeNewFilters(&DeviceTreeFilterSupport);
+    else
+        TreeNew_NodesStructured(DeviceTreeHandle);
 
     PhClearReference(&oldTree);
 }
@@ -799,10 +806,10 @@ BOOLEAN NTAPI DeviceTreeCallback(
             DeviceTreeSortColumn = sorting->SortColumn;
             DeviceTreeSortOrder = sorting->SortOrder;
 
-            TreeNew_NodesStructured(hwnd);
-
             if (DeviceTreeFilterSupport.FilterList)
                 PhApplyTreeNewFilters(&DeviceTreeFilterSupport);
+            else
+                TreeNew_NodesStructured(hwnd);
         }
         return TRUE;
     case TreeNewContextMenu:
@@ -832,6 +839,9 @@ BOOLEAN NTAPI DeviceTreeCallback(
 
             menu = PhCreateEMenu();
             PhInsertEMenuItem(menu, gotoServiceItem = PhCreateEMenuItem(0, 108, L"Go to service...", NULL, NULL), ULONG_MAX);
+            PhInsertEMenuItem(menu, PhCreateEMenuSeparator(), ULONG_MAX);
+            PhInsertEMenuItem(menu, PhCreateEMenuItem(0, ID_DEVICE_SEARCH_ONLINE, L"Search &online\bCtrl+M", NULL, NULL), ULONG_MAX);
+            PhInsertEMenuItem(menu, PhCreateEMenuItem(0, ID_DEVICE_SEARCH_DRIVER_UPDATE, L"Search driver update", NULL, NULL), ULONG_MAX);
             PhInsertEMenuItem(menu, PhCreateEMenuSeparator(), ULONG_MAX);
             PhInsertEMenuItem(menu, enable = PhCreateEMenuItem(0, 0, L"Enable", NULL, NULL), ULONG_MAX);
             PhInsertEMenuItem(menu, disable = PhCreateEMenuItem(0, 1, L"Disable", NULL, NULL), ULONG_MAX);
@@ -914,6 +924,44 @@ BOOLEAN NTAPI DeviceTreeCallback(
                             {
                                 if (devices[i]->InstanceId)
                                     republish |= HardwareDeviceUninstall(hwnd, devices[i]->InstanceId);
+                            }
+                        }
+                        break;
+                    case ID_DEVICE_SEARCH_ONLINE:
+                    case ID_DEVICE_SEARCH_DRIVER_UPDATE:
+                        {
+                            PPH_DEVICE_ITEM deviceItem;
+
+                            if (node->DeviceItem->DeviceInterface)
+                                deviceItem = node->DeviceItem->Parent;
+                            else
+                                deviceItem = node->DeviceItem;
+
+                            if (deviceItem)
+                            {
+                                PPH_DEVICE_PROPERTY deviceId = PhGetDeviceProperty(deviceItem, PhDevicePropertyMatchingDeviceId);
+                                PPH_STRING searchId = NULL;
+
+                                if (deviceId->Valid && deviceId->StringList && deviceId->StringList->Count > 0)
+                                    searchId = deviceId->StringList->Items[0];
+                                else
+                                    searchId = deviceItem->InstanceId;
+
+                                if (searchId)
+                                {
+                                    if (selectedItem->Id == ID_DEVICE_SEARCH_ONLINE)
+                                    {
+                                        PhSearchOnlineString(hwnd, PhGetString(searchId));
+                                    }
+                                    else
+                                    {
+                                        PPH_STRING encodedId = PhpEncodeDeviceQuery(searchId);
+                                        PPH_STRING url = PhFormatString(L"https://www.catalog.update.microsoft.com/search.aspx?q=%s", PhGetString(encodedId));
+                                        PhShellExecute(hwnd, PhGetString(url), NULL);
+                                        PhDereferenceObject(url);
+                                        PhDereferenceObject(encodedId);
+                                    }
+                                }
                             }
                         }
                         break;
@@ -1064,7 +1112,7 @@ VOID DevicesTreeImageListInitialize(
 
     if (DeviceImageList)
     {
-        PhImageListAddIcon(DeviceImageList, PhGetApplicationIcon(TRUE));
+        PhImageListAddIcon(DeviceImageList, PhGetApplicationIcon(TRUE, dpi));
 
         TreeNew_SetImageList(DeviceTreeHandle, DeviceImageList);
     }
@@ -1369,9 +1417,9 @@ VOID DevicesTreeInitialize(
         PhAddTreeNewFilter(&DeviceTreeFilterSupport, DeviceTreeFilterCallback, NULL);
     }
 
-    if (PhGetIntegerSetting(L"TreeListCustomRowSize"))
+    if (PhGetIntegerSetting(SETTING_TREE_LIST_CUSTOM_ROW_SIZE))
     {
-        ULONG treelistCustomRowSize = PhGetIntegerSetting(L"TreeListCustomRowSize");
+        ULONG treelistCustomRowSize = PhGetIntegerSetting(SETTING_TREE_LIST_CUSTOM_ROW_SIZE);
 
         if (treelistCustomRowSize < 15)
             treelistCustomRowSize = 15;
@@ -1379,7 +1427,7 @@ VOID DevicesTreeInitialize(
         TreeNew_SetRowHeight(DeviceTreeHandle, treelistCustomRowSize);
     }
 
-    if (PhGetIntegerSetting(L"EnableThemeSupport"))
+    if (PhGetIntegerSetting(SETTING_ENABLE_THEME_SUPPORT))
     {
         PhInitializeWindowTheme(DeviceTreeHandle, TRUE);
         PhSetControlTheme(DeviceTreeHandle, L"DarkMode_Explorer");
@@ -1412,15 +1460,15 @@ BOOLEAN DevicesTabPageCallback(
             ULONG treelistCustomColors;
             PH_TREENEW_CREATEPARAMS treelistCreateParams = { 0 };
 
-            thinRows = PhGetIntegerSetting(L"ThinRows") ? TN_STYLE_THIN_ROWS : 0;
-            treelistBorder = (PhGetIntegerSetting(L"TreeListBorderEnable") && !PhGetIntegerSetting(L"EnableThemeSupport")) ? WS_BORDER : 0;
-            treelistCustomColors = PhGetIntegerSetting(L"TreeListCustomColorsEnable") ? TN_STYLE_CUSTOM_COLORS : 0;
+            thinRows = PhGetIntegerSetting(SETTING_THIN_ROWS) ? TN_STYLE_THIN_ROWS : 0;
+            treelistBorder = (PhGetIntegerSetting(SETTING_TREE_LIST_BORDER_ENABLE) && !PhGetIntegerSetting(SETTING_ENABLE_THEME_SUPPORT)) ? WS_BORDER : 0;
+            treelistCustomColors = PhGetIntegerSetting(SETTING_TREE_LIST_CUSTOM_COLORS_ENABLE) ? TN_STYLE_CUSTOM_COLORS : 0;
 
             if (treelistCustomColors)
             {
-                treelistCreateParams.TextColor = PhGetIntegerSetting(L"TreeListCustomColorText");
-                treelistCreateParams.FocusColor = PhGetIntegerSetting(L"TreeListCustomColorFocus");
-                treelistCreateParams.SelectionColor = PhGetIntegerSetting(L"TreeListCustomColorSelection");
+                treelistCreateParams.TextColor = PhGetIntegerSetting(SETTING_TREE_LIST_CUSTOM_COLOR_TEXT);
+                treelistCreateParams.FocusColor = PhGetIntegerSetting(SETTING_TREE_LIST_CUSTOM_COLOR_FOCUS);
+                treelistCreateParams.SelectionColor = PhGetIntegerSetting(SETTING_TREE_LIST_CUSTOM_COLOR_SELECTION);
             }
 
             hwnd = CreateWindow(
@@ -1711,6 +1759,8 @@ VOID NTAPI DeviceTreeProcessesUpdatedCallback(
     _In_opt_ PVOID Context
     )
 {
+    BOOLEAN fullyInvalidated = FALSE;
+
     if (PtrToUlong(Parameter) < 2)
         return;
 
@@ -1726,8 +1776,8 @@ VOID NTAPI DeviceTreeProcessesUpdatedCallback(
         DeviceHighlightingDuration,
         DeviceTreeHandle,
         TRUE,
-        NULL,
-        NULL
+        &fullyInvalidated,
+        Context
         );
 }
 
@@ -1735,6 +1785,7 @@ VOID DeviceTreeUpdateCachedSettings(
     _In_ BOOLEAN UpdateColors
     )
 {
+    ShowDeviceRootNode = !!PhGetIntegerSetting(SETTING_NAME_DEVICE_SHOW_ROOT);
     AutoRefreshDeviceTree = !!PhGetIntegerSetting(SETTING_NAME_DEVICE_TREE_AUTO_REFRESH);
     ShowDisconnected = !!PhGetIntegerSetting(SETTING_NAME_DEVICE_TREE_SHOW_DISCONNECTED);
     ShowSoftwareComponents = !!PhGetIntegerSetting(SETTING_NAME_DEVICE_SHOW_SOFTWARE_COMPONENTS);
@@ -1743,6 +1794,7 @@ VOID DeviceTreeUpdateCachedSettings(
     HighlightUpperFiltered = !!PhGetIntegerSetting(SETTING_NAME_DEVICE_TREE_HIGHLIGHT_UPPER_FILTERED);
     HighlightLowerFiltered = !!PhGetIntegerSetting(SETTING_NAME_DEVICE_TREE_HIGHLIGHT_LOWER_FILTERED);
     DeviceHighlightingDuration = PhGetIntegerSetting(SETTING_NAME_DEVICE_HIGHLIGHTING_DURATION);
+    SortNameDevices = !!PhGetIntegerSetting(SETTING_NAME_DEVICE_SORT_CHILDREN_BY_NAME);
     SortChildDevices = !!PhGetIntegerSetting(SETTING_NAME_DEVICE_SORT_CHILD_DEVICES);
 
     if (UpdateColors)

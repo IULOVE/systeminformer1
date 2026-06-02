@@ -32,10 +32,10 @@ jobs:
     name: ${{ matrix.configuration }} ${{ matrix.toolchain }}
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v5
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
 
     - name: NuGet Cache
-      uses: actions/cache@v4
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # 5.0.5
       with:
         path: packages
         key: nuget-${{ runner.os }}-${{ hashFiles('**/packages.config') }}
@@ -46,10 +46,19 @@ jobs:
       working-directory: ${{github.workspace}}
       run: nuget restore .\packages.config -PackagesDirectory .\packages\
 
+    - name: BuildTools Cache
+      id: custombuildtool-cache
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # 5.0.5
+      with:
+        path: tools/CustomBuildTool/bin/Release/**
+        key: custombuildtool-${{ runner.os }}-${{ hashFiles('tools/CustomBuildTool/**', '!tools/CustomBuildTool/bin/**') }}
+        restore-keys: custombuildtool-${{ runner.os }}-
+
     - name: Build Tools
+      if: steps.custombuildtool-cache.outputs.cache-hit != 'true'
       shell: cmd
       working-directory: ${{github.workspace}}
-      run: build\build_tools.cmd
+      run: build\build_init.cmd
 
     - name: Generate
       shell: cmd

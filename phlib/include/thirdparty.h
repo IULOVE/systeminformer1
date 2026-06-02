@@ -72,3 +72,4 @@
 #else
 #error "ThirdParty.lib is missing"
 #endif
+

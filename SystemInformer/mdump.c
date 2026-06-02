@@ -13,7 +13,7 @@
 #include <phapp.h>
 #include <appresolver.h>
 #include <settings.h>
-
+#include <phsettings.h>
 #include <dbghelp.h>
 #include <symprv.h>
 
@@ -199,8 +199,8 @@ VOID PhUiCreateDumpFileProcess(
         return;
 
     context = PhpCreateProcessMiniDumpContext();
-    context->EnableProcessSnapshot = !!PhGetIntegerSetting(L"EnableMinidumpSnapshot");
-    context->EnableKernelSnapshot = !!PhGetIntegerSetting(L"EnableMinidumpKernelMinidump");
+    context->EnableProcessSnapshot = !!PhGetIntegerSetting(SETTING_ENABLE_MINIDUMP_SNAPSHOT);
+    context->EnableKernelSnapshot = !!PhGetIntegerSetting(SETTING_ENABLE_MINIDUMP_KERNEL_MINIDUMP);
     context->ParentWindowHandle = WindowHandle;
     context->ProcessId = ProcessItem->ProcessId;
     context->ProcessItem = PhReferenceObject(ProcessItem);
@@ -715,7 +715,7 @@ LRESULT CALLBACK PhpProcessMiniDumpTaskDialogSubclassProc(
             memset(&config, 0, sizeof(TASKDIALOGCONFIG));
             config.cbSize = sizeof(TASKDIALOGCONFIG);
             config.dwFlags = TDF_USE_HICON_MAIN | TDF_ALLOW_DIALOG_CANCELLATION | TDF_CAN_BE_MINIMIZED;
-            config.hMainIcon = PhGetApplicationIcon(FALSE);
+            config.hMainIcon = PhGetApplicationIcon(FALSE, PhGetWindowDpi(context->WindowHandle));
             config.dwCommonButtons = TDCBF_CLOSE_BUTTON;
             config.pfCallback = PhpProcessMiniDumpErrorPageCallbackProc;
             config.lpCallbackData = (LONG_PTR)context;
@@ -808,7 +808,7 @@ NTSTATUS PhpProcessMiniDumpTaskDialogThread(
     memset(&config, 0, sizeof(TASKDIALOGCONFIG));
     config.cbSize = sizeof(TASKDIALOGCONFIG);
     config.dwFlags = TDF_USE_HICON_MAIN | TDF_ALLOW_DIALOG_CANCELLATION | TDF_SHOW_MARQUEE_PROGRESS_BAR | TDF_CALLBACK_TIMER | TDF_CAN_BE_MINIMIZED;
-    config.hMainIcon = PhGetApplicationIcon(FALSE);
+    config.hMainIcon = PhGetApplicationIcon(FALSE, PhGetWindowDpi(context->ParentWindowHandle));
     config.dwCommonButtons = TDCBF_CANCEL_BUTTON;
     config.pfCallback = PhpProcessMiniDumpTaskDialogCallbackProc;
     config.lpCallbackData = (LONG_PTR)context;

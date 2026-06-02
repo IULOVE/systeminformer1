@@ -85,22 +85,50 @@ typedef struct _IO_STATUS_BLOCK* PIO_STATUS_BLOCK;
 #define MEM_IMAGE SEC_IMAGE
 #endif
 
+#define MEM_EXTENDED_PARAMETER_GRAPHICS 0x00000001
+#define MEM_EXTENDED_PARAMETER_NONPAGED 0x00000002
+#define MEM_EXTENDED_PARAMETER_ZERO_PAGES_OPTIONAL 0x00000004
+#define MEM_EXTENDED_PARAMETER_NONPAGED_LARGE 0x00000008
+#define MEM_EXTENDED_PARAMETER_NONPAGED_HUGE 0x00000010
+#define MEM_EXTENDED_PARAMETER_SOFT_FAULT_PAGES 0x00000020
+#define MEM_EXTENDED_PARAMETER_EC_CODE 0x00000040
+#define MEM_EXTENDED_PARAMETER_SECURE_PAGES 0x00000080
+#define MEM_EXTENDED_PARAMETER_TAGGED 0x00000100
+#define MEM_EXTENDED_PARAMETER_NUMA_NODE_MANDATORY MINLONG64
+
+// typedef enum MEM_SECTION_EXTENDED_PARAMETER_TYPE
+// {
+//     MemSectionExtendedParameterInvalidType = 0,
+//     MemSectionExtendedParameterUserPhysicalFlags,
+//     MemSectionExtendedParameterNumaNode,
+//     MemSectionExtendedParameterSigningLevel,
+//     MemSectionExtendedParameterAttributeFlags,
+//     MemSectionExtendedParameterMax
+// } MEM_SECTION_EXTENDED_PARAMETER_TYPE, *PMEM_SECTION_EXTENDED_PARAMETER_TYPE;
+
+#define MemSectionExtendedParameterInvalidType 0x0
+#define MemSectionExtendedParameterUserPhysicalFlags 0x1
+#define MemSectionExtendedParameterNumaNode 0x2
+#define MemSectionExtendedParameterSigningLevel 0x3
+#define MemSectionExtendedParameterAttributeFlags 0x4
+#define MemSectionExtendedParameterMax 0x5
+
 #if (PHNT_MODE != PHNT_MODE_KERNEL)
 typedef enum _MEMORY_INFORMATION_CLASS
 {
     MemoryBasicInformation,                     // q: MEMORY_BASIC_INFORMATION
     MemoryWorkingSetInformation,                // q: MEMORY_WORKING_SET_INFORMATION
     MemoryMappedFilenameInformation,            // q: UNICODE_STRING
-    MemoryRegionInformation,                    // q: MEMORY_REGION_INFORMATION
+    MemoryRegionInformation,                    // q: MEMORY_REGION_INFORMATION/MEMORY_REGION_INFORMATION_EX
     MemoryWorkingSetExInformation,              // q: MEMORY_WORKING_SET_EX_INFORMATION // since VISTA
     MemorySharedCommitInformation,              // q: MEMORY_SHARED_COMMIT_INFORMATION // since WIN8
     MemoryImageInformation,                     // q: MEMORY_IMAGE_INFORMATION
-    MemoryRegionInformationEx,                  // q: MEMORY_REGION_INFORMATION
+    MemoryRegionInformationEx,                  // q: MEMORY_REGION_INFORMATION/MEMORY_REGION_INFORMATION_EX
     MemoryPrivilegedBasicInformation,           // q: MEMORY_BASIC_INFORMATION
     MemoryEnclaveImageInformation,              // q: MEMORY_ENCLAVE_IMAGE_INFORMATION // since REDSTONE3
-    MemoryBasicInformationCapped,               // q: 10
+    MemoryBasicInformationCapped,               // q: MEMORY_BASIC_INFORMATION
     MemoryPhysicalContiguityInformation,        // q: MEMORY_PHYSICAL_CONTIGUITY_INFORMATION // since 20H1
-    MemoryBadInformation,                       // q: since WIN11
+    MemoryBadInformation,                       // q: MEMORY_BAD_INFORMATION[] // since WIN11
     MemoryBadInformationAllProcesses,           // qs: not implemented // since 22H1
     MemoryImageExtensionInformation,            // q: MEMORY_IMAGE_EXTENSION_INFORMATION // since 24H2
     MaxMemoryInfoClass
@@ -123,7 +151,13 @@ typedef enum _MEMORY_INFORMATION_CLASS
 #define MemoryImageExtensionInformation 0xE
 #endif // (PHNT_MODE != PHNT_MODE_KERNEL)
 
-// MEMORY_WORKING_SET_BLOCK->Protection
+/**
+ * Memory protection constants used by MEMORY_WORKING_SET_BLOCK.Protection.
+ *
+ * \remarks These constants define all 5-bit protection combinations reported by
+ * working-set queries (0..31), including cacheability and guard-page variants.
+ * \sa MEMORY_WORKING_SET_BLOCK
+ */
 #define MEMORY_BLOCK_NOT_ACCESSED 0
 #define MEMORY_BLOCK_READONLY 1
 #define MEMORY_BLOCK_EXECUTABLE 2
@@ -184,38 +218,59 @@ typedef struct _MEMORY_WORKING_SET_INFORMATION
     _Field_size_(NumberOfEntries) MEMORY_WORKING_SET_BLOCK WorkingSetInfo[ANYSIZE_ARRAY];
 } MEMORY_WORKING_SET_INFORMATION, *PMEMORY_WORKING_SET_INFORMATION;
 
-// private
+typedef union _MEMORY_REGION_INFORMATION_TYPE
+{
+    ULONG RegionType;
+    struct
+    {
+        ULONG Private : 1;                 // Region is private to the process (not shared).
+        ULONG MappedDataFile : 1;          // Region is a mapped view of a data file (read/write data mapping).
+        ULONG MappedImage : 1;             // Region is a mapped view of an image file (executable/DLL mapping).
+        ULONG MappedPageFile : 1;          // Region is a mapped view of a pagefile-backed section.
+        ULONG MappedPhysical : 1;          // Region is a mapped view of the \Device\PhysicalMemory section.
+        ULONG DirectMapped : 1;            // Region is a mapped view of a direct-mapped file.
+        ULONG SoftwareEnclave : 1;         // Region is a mapped view of a software enclave. // since REDSTONE3
+        ULONG PageSize64K : 1;             // Region uses 64 KB page size.
+        ULONG PlaceholderReservation : 1;  // Region uses placeholder reservations. // since REDSTONE4
+        ULONG MappedAwe : 1;               // Region uses Address Windowing Extensions (AWE). // 21H1
+        ULONG MappedWriteWatch : 1;        // Region uses write-watch protection.
+        ULONG PageSizeLarge : 1;           // Region uses large page size.
+        ULONG PageSizeHuge : 1;            // Region uses huge page size.
+        ULONG Reserved : 19;
+    };
+} MEMORY_REGION_INFORMATION_TYPE, *PMEMORY_REGION_INFORMATION_TYPE;
+
+/**
+ * The MEMORY_REGION_INFORMATION structure contains summary information about a virtual memory region.
+ */
 typedef struct _MEMORY_REGION_INFORMATION
 {
-    PVOID AllocationBase;
-    ULONG AllocationProtect;
-    union
-    {
-        ULONG RegionType;
-        struct
-        {
-            ULONG Private : 1;
-            ULONG MappedDataFile : 1;
-            ULONG MappedImage : 1;
-            ULONG MappedPageFile : 1;
-            ULONG MappedPhysical : 1;
-            ULONG DirectMapped : 1;
-            ULONG SoftwareEnclave : 1; // REDSTONE3
-            ULONG PageSize64K : 1;
-            ULONG PlaceholderReservation : 1; // REDSTONE4
-            ULONG MappedAwe : 1; // 21H1
-            ULONG MappedWriteWatch : 1;
-            ULONG PageSizeLarge : 1;
-            ULONG PageSizeHuge : 1;
-            ULONG Reserved : 19;
-        };
-    };
-    SIZE_T RegionSize;
-    SIZE_T CommitSize;
-    ULONG_PTR PartitionId; // 19H1
-    ULONG_PTR NodePreference; // 20H1
+    PVOID AllocationBase;                  // Base address of the allocation.
+    ULONG AllocationProtect;               // Page protection when the allocation was created (individual pages can be different from this value).
+    ULONG RegionType;                      // Region type flags.
+    SIZE_T RegionSize;                     // The combined size of pages in the region.
+    SIZE_T CommitSize;                     // The commit charge associated with the allocation.
 } MEMORY_REGION_INFORMATION, *PMEMORY_REGION_INFORMATION;
 
+/**
+ * The MEMORY_REGION_INFORMATION_EX structure extends MEMORY_REGION_INFORMATION
+ * with partition and NUMA preference metadata.
+ */
+typedef struct _MEMORY_REGION_INFORMATION_EX
+{
+    PVOID AllocationBase;                  // Base address of the allocation.
+    ULONG AllocationProtect;               // Page protection when the allocation was created (individual pages can be different from this value).
+    ULONG RegionType;                      // Region type flags.
+    SIZE_T RegionSize;                     // The combined size of pages in the region.
+    SIZE_T CommitSize;                     // The commit charge associated with the allocation.
+    ULONG_PTR PartitionId;                 // 19H1
+    ULONG_PTR NodePreference;              // 20H1
+} MEMORY_REGION_INFORMATION_EX, *PMEMORY_REGION_INFORMATION_EX;
+
+/**
+ * The MEMORY_WORKING_SET_EX_LOCATION enumeration describes where a page is located
+ * when returned through extended working-set information.
+ */
 // private
 typedef enum _MEMORY_WORKING_SET_EX_LOCATION
 {
@@ -258,10 +313,10 @@ typedef union _MEMORY_WORKING_SET_EX_BLOCK
             ULONG_PTR Reserved0 : 14;
             ULONG_PTR Shared : 1;                   // If this bit is 1, the page can be shared.
             ULONG_PTR Reserved1 : 5;
-            ULONG_PTR PageTable : 1;
+            ULONG_PTR PageTable : 1;                // If this bit is 1, the page is a page table entry.
             ULONG_PTR Location : 2;                 // The memory location of the page.  MEMORY_WORKING_SET_EX_LOCATION
             ULONG_PTR Priority : 3;                 // The memory priority of the page.
-            ULONG_PTR ModifiedList : 1;
+            ULONG_PTR ModifiedList : 1;             // If this bit is 1, the page is on the modified standby list.
             ULONG_PTR Reserved2 : 2;
             ULONG_PTR SharedOriginal : 1;           // If this bit is 1, the page was not modified.
             ULONG_PTR Bad : 1;                      // If this bit is 1, the page is has been reported as bad.
@@ -282,13 +337,19 @@ typedef struct _MEMORY_WORKING_SET_EX_INFORMATION
     MEMORY_WORKING_SET_EX_BLOCK VirtualAttributes;    // The attributes of the page at VirtualAddress.
 } MEMORY_WORKING_SET_EX_INFORMATION, *PMEMORY_WORKING_SET_EX_INFORMATION;
 
-// private
+/**
+ * The MEMORY_SHARED_COMMIT_INFORMATION structure contains the total commit size
+ * for a region of memory that is shared between processes.
+ */
 typedef struct _MEMORY_SHARED_COMMIT_INFORMATION
 {
     SIZE_T CommitSize;
 } MEMORY_SHARED_COMMIT_INFORMATION, *PMEMORY_SHARED_COMMIT_INFORMATION;
 
-// private
+/**
+ * The MEMORY_IMAGE_INFORMATION structure describes image mapping details
+ * for a region of memory that is backed by an image.
+ */
 typedef struct _MEMORY_IMAGE_INFORMATION
 {
     PVOID ImageBase;
@@ -307,15 +368,20 @@ typedef struct _MEMORY_IMAGE_INFORMATION
     };
 } MEMORY_IMAGE_INFORMATION, *PMEMORY_IMAGE_INFORMATION;
 
-// private
+/**
+ * The MEMORY_ENCLAVE_IMAGE_INFORMATION structure contains extended image
+ * information with enclave identity metadata.
+ */
 typedef struct _MEMORY_ENCLAVE_IMAGE_INFORMATION
 {
     MEMORY_IMAGE_INFORMATION ImageInfo;
-    UCHAR UniqueID[32];
-    UCHAR AuthorID[32];
+    UCHAR UniqueID[32]; // 32-byte unique identifier for the enclave image.
+    UCHAR AuthorID[32]; // 32-byte identifier for the author/creator of the enclave image.
 } MEMORY_ENCLAVE_IMAGE_INFORMATION, *PMEMORY_ENCLAVE_IMAGE_INFORMATION;
 
-// private
+/**
+ * The MEMORY_PHYSICAL_CONTIGUITY_UNIT_STATE structure describes the eligibility state or contiguity unit.
+ */
 typedef enum _MEMORY_PHYSICAL_CONTIGUITY_UNIT_STATE
 {
     MemoryNotContiguous,
@@ -325,21 +391,25 @@ typedef enum _MEMORY_PHYSICAL_CONTIGUITY_UNIT_STATE
     MemoryContiguityStateMax,
 } MEMORY_PHYSICAL_CONTIGUITY_UNIT_STATE;
 
-// private
+/**
+ * The MEMORY_PHYSICAL_CONTIGUITY_UNIT_INFORMATION structure describes the per-unit contiguity state.
+ */
 typedef struct _MEMORY_PHYSICAL_CONTIGUITY_UNIT_INFORMATION
 {
     union
     {
+        ULONG AllInformation;
         struct
         {
             ULONG State : 2;
             ULONG Reserved : 30;
         };
-        ULONG AllInformation;
     };
 } MEMORY_PHYSICAL_CONTIGUITY_UNIT_INFORMATION, *PMEMORY_PHYSICAL_CONTIGUITY_UNIT_INFORMATION;
 
-// private
+/**
+ * The MEMORY_PHYSICAL_CONTIGUITY_INFORMATION structure describes a virtual range and contiguity unit characteristics for physical contiguity queries.
+ */
 typedef struct _MEMORY_PHYSICAL_CONTIGUITY_INFORMATION
 {
     PVOID VirtualAddress;
@@ -349,106 +419,171 @@ typedef struct _MEMORY_PHYSICAL_CONTIGUITY_INFORMATION
     PMEMORY_PHYSICAL_CONTIGUITY_UNIT_INFORMATION ContiguityUnitInformation;
 } MEMORY_PHYSICAL_CONTIGUITY_INFORMATION, *PMEMORY_PHYSICAL_CONTIGUITY_INFORMATION;
 
-// private
+// rev
+// MEMORY_BAD_INFORMATION Flags
+#define MEMORY_BAD_INFORMATION_FLAG_SOURCE 0x1
+#define MEMORY_BAD_INFORMATION_FLAG_TYPE 0x2
+
+// rev
+/**
+ * The MEMORY_BAD_INFORMATION structure describes one element in the output
+ * array returned by MemoryBadInformation on builds that use 16-byte records.
+ */
+typedef struct _MEMORY_BAD_INFORMATION
+{
+    PVOID BadAddress; // Starting address associated with the bad-memory entry.
+    ULONG_PTR Flags;  // MEMORY_BAD_INFORMATION_FLAG_SOURCE_BIT7 | MEMORY_BAD_INFORMATION_FLAG_ENTRY_TYPE_E
+} MEMORY_BAD_INFORMATION, *PMEMORY_BAD_INFORMATION;
+
+// rev
+// MEMORY_BAD_INFORMATION_EX Flags
+#define MEMORY_BAD_INFORMATION_EX_FLAG_TYPE_MASK 0x0000000F
+#define MEMORY_BAD_INFORMATION_EX_FLAG_HAS_AUXILIARY_INFO 0x00000010
+#define MEMORY_BAD_INFORMATION_EX_FLAG_SOURCE_BIT7 0x00000080
+#define MEMORY_BAD_INFORMATION_EX_FLAG_EXTENDED_CLASS 0x00000100
+#define MEMORY_BAD_INFORMATION_EX_FLAG_CONTEXT_ID_SHIFT 9
+#define MEMORY_BAD_INFORMATION_EX_FLAG_CONTEXT_ID_MASK 0xFFFFFE00
+
+// rev
+/**
+ * The MEMORY_BAD_INFORMATION_EX structure describes one element in an
+ * extended bad-memory output array format used by some newer kernels.
+ */
+typedef struct _MEMORY_BAD_INFORMATION_EX
+{
+    PVOID BadAddress; // Starting address of the bad memory range.
+    ULONG_PTR Length; // Length in bytes of the bad range.
+    ULONG Flags;
+    ULONG Reserved;
+} MEMORY_BAD_INFORMATION_EX, *PMEMORY_BAD_INFORMATION_EX;
+
+/**
+ * The RTL_SCP_CFG_ARM64_HEADER structure contains ARM64 SCP/CFG descriptors; RVAs to handlers
+ * and helper routines used when configuring CFG/SCP emulation on ARM64.
+ */
 typedef struct _RTL_SCP_CFG_ARM64_HEADER
 {
-    ULONG EcInvalidCallHandlerRva;
-    ULONG EcCfgCheckRva;
-    ULONG EcCfgCheckESRva;
-    ULONG EcCallCheckRva;
-    ULONG CpuInitializationCompleteLoadRva;
-    ULONG LdrpValidateEcCallTargetInitRva;
-    ULONG SyscallFfsSizeRva;
-    ULONG SyscallFfsBaseRva;
+    ULONG EcInvalidCallHandlerRva;        // RVA to invalid EC call handler.
+    ULONG EcCfgCheckRva;                  // RVA to EC CFG check routine.
+    ULONG EcCfgCheckESRva;                // RVA to EC CFG check exception stub RVA.
+    ULONG EcCallCheckRva;                 // RVA to EC call-check routine.
+    ULONG CpuInitializationCompleteLoadRva; // RVA related to CPU init completion load.
+    ULONG LdrpValidateEcCallTargetInitRva; // RVA used by loader validation init.
+    ULONG SyscallFfsSizeRva;               // RVA describing syscall FFS size.
+    ULONG SyscallFfsBaseRva;               // RVA describing syscall FFS base.
 } RTL_SCP_CFG_ARM64_HEADER, *PRTL_SCP_CFG_ARM64_HEADER;
 
-// private
+/**
+ * The RTL_SCP_CFG_PAGE_TYPE enumeration describes page types used by SCP/CFG image extensions.
+ */
 typedef enum _RTL_SCP_CFG_PAGE_TYPE
 {
-    RtlScpCfgPageTypeNop,
-    RtlScpCfgPageTypeDefault,
-    RtlScpCfgPageTypeExportSuppression,
-    RtlScpCfgPageTypeFptr,
-    RtlScpCfgPageTypeMax,
-    RtlScpCfgPageTypeNone
+    RtlScpCfgPageTypeNop,                 // No-op / placeholder page.
+    RtlScpCfgPageTypeDefault,             // Default handling page.
+    RtlScpCfgPageTypeExportSuppression,   // Export-suppression descriptor page.
+    RtlScpCfgPageTypeFptr,                // Page that contains function pointers.
+    RtlScpCfgPageTypeMax,                 // Upper bound for the enum.
+    RtlScpCfgPageTypeNone                 // Explicit 'none' value.
 } RTL_SCP_CFG_PAGE_TYPE;
 
-// private
+/**
+ * The RTL_SCP_CFG_COMMON_HEADER structure contains RVAs to dispatch and check
+ * routines used by SCP/CFG configuration blocks.
+ */
 typedef struct _RTL_SCP_CFG_COMMON_HEADER
 {
-    ULONG CfgDispatchRva;
-    ULONG CfgDispatchESRva;
-    ULONG CfgCheckRva;
-    ULONG CfgCheckESRva;
-    ULONG InvalidCallHandlerRva;
-    ULONG FnTableRva;
+    ULONG CfgDispatchRva;         // RVA to CFG dispatch routine.
+    ULONG CfgDispatchESRva;       // RVA to CFG dispatch exception stub.
+    ULONG CfgCheckRva;            // RVA to CFG checking routine.
+    ULONG CfgCheckESRva;          // RVA to CFG checking exception stub.
+    ULONG InvalidCallHandlerRva;  // RVA to invalid-call handler.
+    ULONG FnTableRva;             // RVA to function-pointer table.
 } RTL_SCP_CFG_COMMON_HEADER, *PRTL_SCP_CFG_COMMON_HEADER;
 
-// private
+/**
+ * The RTL_SCP_CFG_HEADER structure contains the common SCP/CFG configuration header.
+ */
 typedef struct _RTL_SCP_CFG_HEADER
 {
     RTL_SCP_CFG_COMMON_HEADER Common;
 } RTL_SCP_CFG_HEADER, *PRTL_SCP_CFG_HEADER;
 
-// private
+/**
+ * The RTL_SCP_CFG_REGION_BOUNDS structure describes inclusive start/end
+ * addresses of an SCP/CFG-protected region.
+ */
 typedef struct _RTL_SCP_CFG_REGION_BOUNDS
 {
-    PVOID StartAddress;
-    PVOID EndAddress;
+    PVOID StartAddress; // Inclusive start address of the region.
+    PVOID EndAddress;   // Inclusive end address of the region.
 } RTL_SCP_CFG_REGION_BOUNDS, *PRTL_SCP_CFG_REGION_BOUNDS;
 
-// private
+/**
+ * The RTL_SCP_CFG_NTDLL_EXPORTS structure contains ntdll export descriptors and
+ * region bounds used to implement or validate CFG/SCP behavior at runtime.
+ */
 typedef struct _RTL_SCP_CFG_NTDLL_EXPORTS
 {
-    RTL_SCP_CFG_REGION_BOUNDS ScpRegions[4];
-    PVOID CfgDispatchFptr;
-    PVOID CfgDispatchESFptr;
-    PVOID CfgCheckFptr;
-    PVOID CfgCheckESFptr;
-    PVOID IllegalCallHandler;
+    RTL_SCP_CFG_REGION_BOUNDS ScpRegions[4]; // Array of SCP region bounds (max 4).
+    PVOID CfgDispatchFptr;                   // Pointer to CFG dispatch function.
+    PVOID CfgDispatchESFptr;                 // Pointer to CFG dispatch exception stub.
+    PVOID CfgCheckFptr;                      // Pointer to CFG check function.
+    PVOID CfgCheckESFptr;                    // Pointer to CFG check exception stub.
+    PVOID IllegalCallHandler;                // Pointer to handler invoked for illegal calls.
 } RTL_SCP_CFG_NTDLL_EXPORTS, *PRTL_SCP_CFG_NTDLL_EXPORTS;
 
-// private
+/**
+ * The RTL_SCP_CFG_NTDLL_EXPORTS_ARM64EC structure contains ARM64-specific ntdll
+ * export descriptors used for EC / ARM64EC handling.
+ */
 typedef struct _RTL_SCP_CFG_NTDLL_EXPORTS_ARM64EC
 {
-    PVOID EcInvalidCallHandler;
-    PVOID EcCfgCheckFptr;
-    PVOID EcCfgCheckESFptr;
-    PVOID EcCallCheckFptr;
-    PVOID CpuInitializationComplete;
-    PVOID LdrpValidateEcCallTargetInit;
+    PVOID EcInvalidCallHandler;           // Pointer to invalid EC call handler.
+    PVOID EcCfgCheckFptr;                 // Pointer to EC CFG check function.
+    PVOID EcCfgCheckESFptr;               // Pointer to EC CFG check exception stub.
+    PVOID EcCallCheckFptr;                // Pointer to EC call-check routine.
+    PVOID CpuInitializationComplete;      // Pointer to CPU initialization completion routine.
+    PVOID LdrpValidateEcCallTargetInit;   // Pointer to loader validation init routine.
     struct
     {
-        PVOID SyscallFfsSize;
+        PVOID SyscallFfsSize;             // Pointer to syscall FFS size descriptor.
         union
         {
-            PVOID Ptr;
-            ULONG Value;
+            PVOID Ptr;                    // Pointer form of FFS size descriptor.
+            ULONG Value;                  // Value form of FFS size descriptor.
         };
     };
-    PVOID SyscallFfsBase;
+    PVOID SyscallFfsBase;                 // Pointer to syscall FFS base.
 } RTL_SCP_CFG_NTDLL_EXPORTS_ARM64EC, *PRTL_SCP_CFG_NTDLL_EXPORTS_ARM64EC;
 
-// private
+/**
+ * The RTL_RETPOLINE_ROUTINES structure contains indices/offsets and jump-table
+ * descriptors used for retpoline/runtime patching.
+ */
 typedef struct _RTL_RETPOLINE_ROUTINES
 {
-    ULONG SwitchtableJump[16];
-    ULONG CfgIndirectRax;
-    ULONG NonCfgIndirectRax;
-    ULONG ImportR10;
-    ULONG JumpHpat;
+    ULONG SwitchtableJump[16]; // Jump offsets for switchtable entries.
+    ULONG CfgIndirectRax;      // Index/offset for indirect calls using RAX under CFG.
+    ULONG NonCfgIndirectRax;   // Index/offset for indirect calls not under CFG.
+    ULONG ImportR10;           // Import slot/index for R10-based imports.
+    ULONG JumpHpat;            // Hot-spot jump table offset.
 } RTL_RETPOLINE_ROUTINES, *PRTL_RETPOLINE_ROUTINES;
 
-// private
+/**
+ * The RTL_KSCP_ROUTINES structure contains the kernel-side
+ * SCP-related routine descriptors used for XFG/CFG/retpoline support.
+ */
 typedef struct _RTL_KSCP_ROUTINES
 {
-    ULONG UnwindDataOffset;
+    ULONG UnwindDataOffset;  // Offset to unwind data for the routines.
     RTL_RETPOLINE_ROUTINES RetpolineRoutines;
-    ULONG CfgDispatchSmep;
-    ULONG CfgDispatchNoSmep;
+    ULONG CfgDispatchSmep;   // CFG dispatch variant when SMEP is enabled.
+    ULONG CfgDispatchNoSmep; // CFG dispatch variant when SMEP is not enabled.
 } RTL_KSCP_ROUTINES, *PRTL_KSCP_ROUTINES;
 
-// private
+/**
+ * The MEMORY_IMAGE_EXTENSION_TYPE enumeration specifies the supported image extension types.
+ */
 typedef enum _MEMORY_IMAGE_EXTENSION_TYPE
 {
     MemoryImageExtensionCfgScp,
@@ -456,13 +591,16 @@ typedef enum _MEMORY_IMAGE_EXTENSION_TYPE
     MemoryImageExtensionTypeMax,
 } MEMORY_IMAGE_EXTENSION_TYPE;
 
-// private
+/**
+ * The MEMORY_IMAGE_EXTENSION_INFORMATION structure describes an optional image extension
+ * containing additional metadata or features (for example, CFG/SCP related extensions).
+ */
 typedef struct _MEMORY_IMAGE_EXTENSION_INFORMATION
 {
-    MEMORY_IMAGE_EXTENSION_TYPE ExtensionType;
-    ULONG Flags;
-    PVOID ExtensionImageBaseRva;
-    SIZE_T ExtensionSize;
+    MEMORY_IMAGE_EXTENSION_TYPE ExtensionType; // Type of the image extension (MEMORY_IMAGE_EXTENSION_TYPE).
+    ULONG Flags;                               // Extension-specific flags.
+    PVOID ExtensionImageBaseRva;               // Relative virtual address of the extension image base.
+    SIZE_T ExtensionSize;                      // Size, in bytes, of the extension region.
 } MEMORY_IMAGE_EXTENSION_INFORMATION, *PMEMORY_IMAGE_EXTENSION_INFORMATION;
 
 #define MMPFNLIST_ZERO 0
@@ -587,108 +725,6 @@ typedef struct _MMPFN_MEMSNAP_INFORMATION
     ULONG_PTR Count;
 } MMPFN_MEMSNAP_INFORMATION, *PMMPFN_MEMSNAP_INFORMATION;
 
-typedef enum _SECTION_INFORMATION_CLASS
-{
-    SectionBasicInformation, // q; SECTION_BASIC_INFORMATION
-    SectionImageInformation, // q; SECTION_IMAGE_INFORMATION
-    SectionRelocationInformation, // q; ULONG_PTR RelocationDelta // name:wow64:whNtQuerySection_SectionRelocationInformation // since WIN7
-    SectionOriginalBaseInformation, // q; PVOID BaseAddress // since REDSTONE
-    SectionInternalImageInformation, // q; SECTION_INTERNAL_IMAGE_INFORMATION // since REDSTONE2
-    MaxSectionInfoClass
-} SECTION_INFORMATION_CLASS;
-
-/**
- * The SECTION_BASIC_INFORMATION structure contains information of an opened section object.
- * \sa https://learn.microsoft.com/en-us/windows/win32/devnotes/ntquerysection
- */
-typedef struct _SECTION_BASIC_INFORMATION
-{
-    PVOID BaseAddress;              // The base virtual address of the section if the section is based.
-    ULONG AllocationAttributes;     // The allocation attributes flags.
-    LARGE_INTEGER MaximumSize;      // The maximum size of the section in bytes.
-} SECTION_BASIC_INFORMATION, *PSECTION_BASIC_INFORMATION;
-
-// symbols
-typedef struct _SECTION_IMAGE_INFORMATION
-{
-    PVOID TransferAddress;
-    ULONG ZeroBits;
-    SIZE_T MaximumStackSize;
-    SIZE_T CommittedStackSize;
-    ULONG SubSystemType;
-    union
-    {
-        struct
-        {
-            USHORT SubSystemMinorVersion;
-            USHORT SubSystemMajorVersion;
-        };
-        ULONG SubSystemVersion;
-    };
-    union
-    {
-        struct
-        {
-            USHORT MajorOperatingSystemVersion;
-            USHORT MinorOperatingSystemVersion;
-        };
-        ULONG OperatingSystemVersion;
-    };
-    USHORT ImageCharacteristics;
-    USHORT DllCharacteristics;
-    USHORT Machine;
-    BOOLEAN ImageContainsCode;
-    union
-    {
-        UCHAR ImageFlags;
-        struct
-        {
-            UCHAR ComPlusNativeReady : 1;
-            UCHAR ComPlusILOnly : 1;
-            UCHAR ImageDynamicallyRelocated : 1;
-            UCHAR ImageMappedFlat : 1;
-            UCHAR BaseBelow4gb : 1;
-            UCHAR ComPlusPrefer32bit : 1;
-            UCHAR Reserved : 2;
-        };
-    };
-    ULONG LoaderFlags;
-    ULONG ImageFileSize;
-    ULONG CheckSum;
-} SECTION_IMAGE_INFORMATION, *PSECTION_IMAGE_INFORMATION;
-
-// symbols
-typedef struct _SECTION_INTERNAL_IMAGE_INFORMATION
-{
-    SECTION_IMAGE_INFORMATION SectionInformation;
-    union
-    {
-        ULONG ExtendedFlags;
-        struct
-        {
-            ULONG ImageExportSuppressionEnabled : 1;
-            ULONG ImageCetShadowStacksReady : 1; // 20H1
-            ULONG ImageXfgEnabled : 1; // 20H2
-            ULONG ImageCetShadowStacksStrictMode : 1;
-            ULONG ImageCetSetContextIpValidationRelaxedMode : 1;
-            ULONG ImageCetDynamicApisAllowInProc : 1;
-            ULONG ImageCetDowngradeReserved1 : 1;
-            ULONG ImageCetDowngradeReserved2 : 1;
-            ULONG ImageExportSuppressionInfoPresent : 1;
-            ULONG ImageCfgEnabled : 1;
-            ULONG Reserved : 22;
-        };
-    };
-} SECTION_INTERNAL_IMAGE_INFORMATION, *PSECTION_INTERNAL_IMAGE_INFORMATION;
-
-#if (PHNT_MODE != PHNT_MODE_KERNEL)
-typedef enum _SECTION_INHERIT
-{
-    ViewShare = 1,
-    ViewUnmap = 2
-} SECTION_INHERIT;
-#endif // (PHNT_MODE != PHNT_MODE_KERNEL)
-
 // Flags directly correspond to KPROCESS.Flags, of type KEXECUTE_OPTIONS (named bitfields available).
 // Flags adjust OS behavior for 32-bit processes only. They are effectively ignored for ARM64 and x64 processes.
 // [nt!Mi]canGrantExecute = KF_GLOBAL_32BIT_EXECUTE || MEM_EXECUTE_OPTION_ENABLE || (!KF_GLOBAL_32BIT_NOEXECUTE && !MEM_EXECUTE_OPTION_DISABLE)
@@ -711,8 +747,10 @@ typedef enum _SECTION_INHERIT
  * The NtAllocateVirtualMemory routine reserves, commits, or both, a region of pages within the user-mode virtual address space of a specified process.
  *
  * \param ProcessHandle A handle for the process for which the mapping should be done.
- * \param BaseAddress A pointer to a variable that will receive the base address of the allocated region of pages. If the initial value is not zero, the region is allocated at the specified virtual address.
- * \param ZeroBits The number of high-order address bits that must be zero in the base address of the section view. This value must be less than 21 and the initial value of BaseAddress must be zero.
+ * \param BaseAddress A pointer to a variable that will receive the base address of the allocated region of pages.
+ * If the initial value is not zero, the region is allocated at the specified virtual address.
+ * \param ZeroBits The number of high-order address bits that must be zero in the base address of the section view.
+ * This value must be less than 21 and the initial value of BaseAddress must be zero.
  * \param RegionSize A pointer to a variable that will receive the actual size, in bytes, of the allocated region of pages.
  * \param AllocationType A bitmask containing flags that specify the type of allocation to be performed.
  * \param PageProtection A bitmask containing page protection flags that specify the protection desired for the committed region of pages.
@@ -721,6 +759,7 @@ typedef enum _SECTION_INHERIT
  */
 _Must_inspect_result_
 _When_(return == 0, __drv_allocatesMem(mem))
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -749,6 +788,7 @@ NtAllocateVirtualMemory(
  */
 _Must_inspect_result_
 _When_(return == 0, __drv_allocatesMem(Mem))
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -772,6 +812,7 @@ NtAllocateVirtualMemoryEx(
  * \param FreeType The type of free operation. This parameter can be MEM_DECOMMIT or MEM_RELEASE.
  * \return NTSTATUS Successful or errant status.
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -792,6 +833,7 @@ NtFreeVirtualMemory(
  * \param NumberOfBytesRead A pointer to a variable that receives the number of bytes transferred into the specified buffer.
  * \return NTSTATUS Successful or errant status.
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -837,6 +879,7 @@ NtWow64ReadVirtualMemory64(
  * \param Flags Additional flags for the read operation.
  * \return NTSTATUS Successful or errant status.
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -860,6 +903,7 @@ NtReadVirtualMemoryEx(
  * \param NumberOfBytesWritten A pointer to a variable that receives the number of bytes transferred into the specified buffer.
  * \return NTSTATUS Successful or errant status.
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -903,6 +947,7 @@ NtWow64WriteVirtualMemory64(
  * \param OldProtection A pointer to a variable that receives the previous access protection of the first page in the specified region of pages.
  * \return NTSTATUS Successful or errant status.
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -925,6 +970,7 @@ NtProtectVirtualMemory(
  * \param ReturnLength A pointer to a variable that receives the number of bytes returned in the MemoryInformation buffer.
  * \return NTSTATUS Successful or errant status.
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -965,11 +1011,12 @@ NtWow64QueryVirtualMemory64(
  * The NtFlushVirtualMemory routine flushes the instruction cache for a specified process.
  *
  * \param ProcessHandle A handle to the process whose instruction cache is to be flushed.
- * \param BaseAddress A pointer to the base address of the region of memory to be flushed.
+ * \param BaseAddress A pointer to the base address of the memory region to be flushed.
  * \param RegionSize A pointer to a variable that specifies the size of the region to be flushed.
  * \param IoStatus A pointer to an IO_STATUS_BLOCK structure that receives the status of the flush operation.
  * \return NTSTATUS Successful or errant status.
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -987,12 +1034,12 @@ NtFlushVirtualMemory(
 typedef enum _VIRTUAL_MEMORY_INFORMATION_CLASS
 {
     VmPrefetchInformation,                      // s: MEMORY_PREFETCH_INFORMATION
-    VmPagePriorityInformation,                  // s: MEMORY_PAGE_PRIORITY_INFORMATION
+    VmPagePriorityInformation,                  // s: MEMORY_PAGE_PRIORITY_INFORMATION (PagePriority 0..5)
     VmCfgCallTargetInformation,                 // s: CFG_CALL_TARGET_LIST_INFORMATION // REDSTONE2
     VmPageDirtyStateInformation,                // s: MEMORY_PAGE_DIRTY_STATE_INFORMATION // REDSTONE3
-    VmImageHotPatchInformation,                 // s: 19H1
-    VmPhysicalContiguityInformation,            // s: MEMORY_PHYSICAL_CONTIGUITY_INFORMATION // 20H1 // (requires SeLockMemoryPrivilege)
-    VmVirtualMachinePrepopulateInformation,
+    VmImageHotPatchInformation,                 // s: ULONG // since 19H1
+    VmPhysicalContiguityInformation,            // s: ULONG PageSize (MiPageSizes index) // since 20H1 // (requires SeLockMemoryPrivilege)
+    VmVirtualMachinePrepopulateInformation,     // s: ULONG
     VmRemoveFromWorkingSetInformation,          // s: MEMORY_REMOVE_WORKING_SET_INFORMATION
     MaxVmInfoClass
 } VIRTUAL_MEMORY_INFORMATION_CLASS;
@@ -1011,12 +1058,24 @@ typedef enum _VIRTUAL_MEMORY_INFORMATION_CLASS
 
 #if (PHNT_MODE != PHNT_MODE_KERNEL)
 
+/**
+ * Attempt to populate specified single or multiple address ranges
+ * into the process working set (bring pages into physical memory).
+ */
 #define VM_PREFETCH_TO_WORKING_SET 0x1 // since 24H4
 
 // rev
+/**
+ * The MEMORY_PREFETCH_INFORMATION structure defines prefetch-control flags that
+ * determine how prefetch operations are executed on the supplied address ranges.
+ *
+ * \remarks The behavior and success of prefetch operations depend on OS policy,
+ * working set limits, privileges, and presence of backing storage.
+ * \sa NtSetInformationVirtualMemory, VIRTUAL_MEMORY_INFORMATION_CLASS, VmPrefetchInformation
+ */
 typedef struct _MEMORY_PREFETCH_INFORMATION
 {
-    ULONG Flags;
+    ULONG Flags; // VM_PREFETCH_TO_WORKING_SET (other bits rejected in analyzed build)
 } MEMORY_PREFETCH_INFORMATION, *PMEMORY_PREFETCH_INFORMATION;
 
 //
@@ -1032,10 +1091,14 @@ typedef struct _MEMORY_PREFETCH_INFORMATION
 #define MEMORY_PRIORITY_ABOVE_NORMAL     6 // rev
 #define MEMORY_PRIORITY_HIGH             7 // rev
 
+// rev
+#define VM_PAGE_PRIORITY_MIN MEMORY_PRIORITY_LOWEST
+#define VM_PAGE_PRIORITY_MAX MEMORY_PRIORITY_NORMAL
+
 // VmPagePriorityInformation
 typedef struct _MEMORY_PAGE_PRIORITY_INFORMATION
 {
-    ULONG PagePriority;
+    ULONG PagePriority; // VM_PAGE_PRIORITY_MIN..VM_PAGE_PRIORITY_MAX
 } MEMORY_PAGE_PRIORITY_INFORMATION, *PMEMORY_PAGE_PRIORITY_INFORMATION;
 
 // VmCfgCallTargetInformation
@@ -1050,29 +1113,73 @@ typedef struct _CFG_CALL_TARGET_LIST_INFORMATION
 } CFG_CALL_TARGET_LIST_INFORMATION, *PCFG_CALL_TARGET_LIST_INFORMATION;
 
 // rev
+// VmPageDirtyStateInformation
+/**
+ * The MEMORY_PAGE_DIRTY_STATE_INFORMATION structure resets the page dirty tracking state
+ * for selected ranges of virtual memory including the page-dirty-state PTE information
+ * required by the GetWriteWatch and ResetWriteWatch functions.
+ */
 typedef struct _MEMORY_PAGE_DIRTY_STATE_INFORMATION
 {
-    ULONG Flags;
+    ULONG Flags; // Must be zero
 } MEMORY_PAGE_DIRTY_STATE_INFORMATION, *PMEMORY_PAGE_DIRTY_STATE_INFORMATION;
 
 // rev
+/**
+ * Valid flags for MEMORY_REMOVE_WORKING_SET_INFORMATION.Flags.
+ *
+ * \remarks Used with NtSetInformationVirtualMemory(VmRemoveFromWorkingSetInformation)
+ * to request trimming pages from the process working set for the supplied ranges.
+ * This does not decommit memory and does not change protection; trimmed pages remain
+ * valid virtual memory and are faulted back on next access.
+ */
+#define MEMORY_REMOVE_WORKING_SET_FLAG_FORCE_TRIM 0x1
+
+// rev
+/**
+ * The MEMORY_REMOVE_WORKING_SET_INFORMATION structure defines control flags for
+ * VmRemoveFromWorkingSetInformation operations.
+ *
+ * \remarks The memory manager processes each MEMORY_RANGE_ENTRY and attempts to
+ * remove resident pages from the target process working set. This is a trim
+ * operation (resident-set management), not an unmap or free operation.
+ *
+ * Removing resident pages from a process reduces its working set,
+ * which frees physical RAM for other work without destroying the process's
+ * virtual memory mappings. SET_FLAG_FORCE_TRIM flag has more aggressive
+ * trimming behavior for eligible pages in the specified ranges.
+ */
 typedef struct _MEMORY_REMOVE_WORKING_SET_INFORMATION
 {
-    ULONG Flags;
+    ULONG Flags; // MEMORY_REMOVE_WORKING_SET_FLAG_FORCE_TRIM
 } MEMORY_REMOVE_WORKING_SET_INFORMATION, *PMEMORY_REMOVE_WORKING_SET_INFORMATION;
 
-#endif // (PHNT_MODE != PHNT_MODE_KERNEL)
-
-#if (PHNT_MODE != PHNT_MODE_KERNEL)
-
 #if (PHNT_VERSION >= PHNT_WINDOWS_8)
-
+/**
+ * The MEMORY_RANGE_ENTRY structure describes a contiguous region of virtual address space.
+ */
 typedef struct _MEMORY_RANGE_ENTRY
 {
-    PVOID VirtualAddress;
-    SIZE_T NumberOfBytes;
+    PVOID VirtualAddress;        // A pointer to the starting virtual address of the region.
+    SIZE_T NumberOfBytes;        // The size, in bytes, of the region.
 } MEMORY_RANGE_ENTRY, *PMEMORY_RANGE_ENTRY;
 
+/**
+ * The NtSetInformationVirtualMemory routine performs an operation on a specified list of address ranges in the user address space of a process.
+ *
+ * \param ProcessHandle Specifies an open handle for the process in the context of which the operation is to be performed. This handle cannot be invalid.
+ * \param VmInformationClass Specifies the type of operation to perform.
+ * \param NumberOfEntries Number of entries in the array pointed to by the VirtualAddresses parameter. This parameter cannot be 0.
+ * \param VirtualAddresses Pointer to an array of MEMORY_RANGE_ENTRY structures in which each entry specifies a virtual address range to be processed.
+ * The virtual address ranges may cover any part of the process address space accessible by the target process.
+ * \param VmInformation A pointer to a buffer that contains memory information.
+ * Note: If VmInformationClass is VmPrefetchInformation, this parameter cannot be this parameter cannot be NULL and must point to a ULONG variable that is set to 0.
+ * \param VmInformationLength The size of the buffer pointed to by VmInformation.
+ * If VmInformationClass is VmPrefetchInformation, this must be sizeof (ULONG).
+ * \return NTSTATUS Successful or errant status.
+ * \sa https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwsetinformationvirtualmemory
+ */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1091,7 +1198,8 @@ NtSetInformationVirtualMemory(
 #define MAP_SYSTEM 2 // Physical Memory // (requires SeLockMemoryPrivilege)
 
 /**
- * The NtLockVirtualMemory routine locks the specified region of the process's virtual address space into physical memory, ensuring that subsequent access to the region will not incur a page fault.
+ * The NtLockVirtualMemory routine locks the specified region of the process's virtual address space into physical memory,
+ * ensuring that subsequent access to the region will not incur a page fault.
  *
  * \param ProcessHandle A handle to the process whose virtual address space is to be locked.
  * \param BaseAddress A pointer to the base address of the region of pages to be locked.
@@ -1100,6 +1208,7 @@ NtSetInformationVirtualMemory(
  * \return NTSTATUS Successful or errant status.
  * \sa https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtuallock
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1111,7 +1220,8 @@ NtLockVirtualMemory(
     );
 
 /**
- * The NtUnlockVirtualMemory routine unlocks a specified range of pages in the virtual address space of a process, enabling the system to swap the pages out to the paging file if necessary.
+ * The NtUnlockVirtualMemory routine unlocks a specified range of pages in the virtual address space of a process,
+ * enabling the system to swap the pages out to the paging file if necessary.
  *
  * \param ProcessHandle A handle to the process whose virtual address space is to be unlocked.
  * \param BaseAddress A pointer to the base address of the region of pages to be unlocked.
@@ -1120,6 +1230,7 @@ NtLockVirtualMemory(
  * \return NTSTATUS Successful or errant status.
  * \sa https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualunlock
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1136,6 +1247,127 @@ NtUnlockVirtualMemory(
 // Sections
 //
 
+typedef enum _SECTION_INFORMATION_CLASS
+{
+    SectionBasicInformation,            // q; SECTION_BASIC_INFORMATION
+    SectionImageInformation,            // q; SECTION_IMAGE_INFORMATION
+    SectionRelocationInformation,       // q; SECTION_RELOCATION_INFORMATION // since WIN7
+    SectionOriginalBaseInformation,     // q; SECTION_ORIGINAL_BASE_INFORMATION // since REDSTONE
+    SectionInternalImageInformation,    // q; SECTION_INTERNAL_IMAGE_INFORMATION // since REDSTONE2
+    MaxSectionInfoClass
+} SECTION_INFORMATION_CLASS;
+
+/**
+ * The SECTION_BASIC_INFORMATION structure contains basic information about an image section.
+ * \sa https://learn.microsoft.com/en-us/windows/win32/devnotes/ntquerysection
+ */
+typedef struct _SECTION_BASIC_INFORMATION
+{
+    PVOID BaseAddress;              // The base virtual address of the section if the section is based.
+    ULONG AllocationAttributes;     // The allocation attributes flags.
+    LARGE_INTEGER MaximumSize;      // The maximum size of the section in bytes.
+} SECTION_BASIC_INFORMATION, *PSECTION_BASIC_INFORMATION;
+
+/**
+ * The SECTION_IMAGE_INFORMATION structure contains detailed information about an image section.
+ */
+typedef struct _SECTION_IMAGE_INFORMATION
+{
+    PVOID TransferAddress;          // The address of the image entry point function.
+    ULONG ZeroBits;                 // The number of high-order address bits that must be zero in the image base address.
+    SIZE_T MaximumStackSize;        // The maximum stack size of threads from the PE file header.
+    SIZE_T CommittedStackSize;      // The initial stack size of threads from the PE file header.
+    ULONG SubSystemType;            // The image subsystem from the PE file header (e.g., Windows GUI, Windows CUI, POSIX).
+    union
+    {
+        struct
+        {
+            USHORT SubSystemMinorVersion;
+            USHORT SubSystemMajorVersion;
+        };
+        ULONG SubSystemVersion;
+    };
+    union
+    {
+        struct
+        {
+            USHORT MajorOperatingSystemVersion;
+            USHORT MinorOperatingSystemVersion;
+        };
+        ULONG OperatingSystemVersion;
+    };
+    USHORT ImageCharacteristics;    // The image characteristics from the PE file header.
+    USHORT DllCharacteristics;      // The DLL characteristics flags (e.g., ASLR, NX compatibility).
+    USHORT Machine;                 // The image architecture (e.g., x86, x64, ARM).
+    BOOLEAN ImageContainsCode;      // The image contains native executable code.
+    union
+    {
+        UCHAR ImageFlags;
+        struct
+        {
+            UCHAR ComPlusNativeReady : 1;           // The image contains precompiled .NET assembly generated by NGEN (Native Image Generator).
+            UCHAR ComPlusILOnly : 1;                // the image contains only Microsoft Intermediate Language (IL) assembly.
+            UCHAR ImageDynamicallyRelocated : 1;    // The image was mapped using a random base address rather than the preferred base address.
+            UCHAR ImageMappedFlat : 1;              // The image was mapped using a single contiguous region, rather than separate regions for each section.
+            UCHAR BaseBelow4gb : 1;                 // The image was mapped using a base address below the 4 GB boundary.
+            UCHAR ComPlusPrefer32bit : 1;           // The image prefers to run as a 32-bit process, even on a 64-bit system.
+            UCHAR Reserved : 2;
+        };
+    };
+    ULONG LoaderFlags;               // Reserved by ntdll.dll for the Windows loader.
+    ULONG ImageFileSize;             // The size of the image, in bytes, including all headers.
+    ULONG CheckSum;                  // The image file checksum, from the PE optional header.
+} SECTION_IMAGE_INFORMATION, *PSECTION_IMAGE_INFORMATION;
+
+// private
+typedef struct _SECTION_RELOCATION_INFORMATION
+{
+    ULONG_PTR RelocationDelta;
+} SECTION_RELOCATION_INFORMATION, *PSECTION_RELOCATION_INFORMATION;
+
+// private
+typedef struct _SECTION_ORIGINAL_BASE_INFORMATION
+{
+    PVOID BaseAddress;
+} SECTION_ORIGINAL_BASE_INFORMATION, *PSECTION_ORIGINAL_BASE_INFORMATION;
+
+/**
+ * The SECTION_INTERNAL_IMAGE_INFORMATION structure contains information about Control Flow Guard (CFG) features required by the image section.
+ */
+typedef struct _SECTION_INTERNAL_IMAGE_INFORMATION
+{
+    SECTION_IMAGE_INFORMATION SectionInformation;
+    union
+    {
+        ULONG ExtendedFlags;
+        struct
+        {
+            ULONG ImageExportSuppressionEnabled : 1;
+            ULONG ImageCetShadowStacksReady : 1; // 20H1
+            ULONG ImageXfgEnabled : 1; // 20H2
+            ULONG ImageCetShadowStacksStrictMode : 1;
+            ULONG ImageCetSetContextIpValidationRelaxedMode : 1;
+            ULONG ImageCetDynamicApisAllowInProc : 1;
+            ULONG ImageCetDowngradeReserved1 : 1;
+            ULONG ImageCetDowngradeReserved2 : 1;
+            ULONG ImageExportSuppressionInfoPresent : 1;
+            ULONG ImageCfgEnabled : 1;
+            ULONG Reserved : 22;
+        };
+    };
+} SECTION_INTERNAL_IMAGE_INFORMATION, *PSECTION_INTERNAL_IMAGE_INFORMATION;
+
+#if (PHNT_MODE != PHNT_MODE_KERNEL)
+/**
+ * The SECTION_INHERIT structure specifies how the mapped view of the section is to be shared with child processes.
+ */
+typedef enum _SECTION_INHERIT
+{
+    ViewShare = 1, // The mapped view of the section will be mapped into any child processes created by the process.
+    ViewUnmap = 2  // The mapped view of the section will not be mapped into any child processes created by the process.
+} SECTION_INHERIT;
+#endif // (PHNT_MODE != PHNT_MODE_KERNEL)
+
 #if (PHNT_MODE != PHNT_MODE_KERNEL)
 /**
  * The NtCreateSection routine creates a section object.
@@ -1143,13 +1375,16 @@ NtUnlockVirtualMemory(
  * \param SectionHandle Pointer to a variable that receives a handle to the section object.
  * \param DesiredAccess The access mask that specifies the requested access to the section object.
  * \param ObjectAttributes Pointer to the base virtual address of the view to unmap. This value can be any virtual address within the view.
- * \param MaximumSize The maximum size, in bytes, of the section. The actual size when backed by the paging file, or the maximum the file can be extended or mapped when backed by an ordinary file.
+ * \param MaximumSize The maximum size, in bytes, of the section. The actual size when backed by the paging file,
+ * or the maximum the file can be extended or mapped when backed by an ordinary file.
  * \param SectionPageProtection Specifies the protection to place on each page in the section.
  * \param AllocationAttributes A bitmask of SEC_XXX flags that determines the allocation attributes of the section.
- * \param FileHandle Optionally specifies a handle for an open file object. If the value of FileHandle is NULL, the section is backed by the paging file. Otherwise, the section is backed by the specified file.
+ * \param FileHandle Optionally specifies a handle for an open file object. If the value of FileHandle is NULL,
+ * the section is backed by the paging file. Otherwise, the section is backed by the specified file.
  * \return NTSTATUS Successful or errant status.
  * \sa https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatesection
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1170,15 +1405,18 @@ NtCreateSection(
  * \param SectionHandle Pointer to a variable that receives a handle to the section object.
  * \param DesiredAccess The access mask that specifies the requested access to the section object.
  * \param ObjectAttributes Pointer to the base virtual address of the view to unmap. This value can be any virtual address within the view.
- * \param MaximumSize The maximum size, in bytes, of the section. The actual size when backed by the paging file, or the maximum the file can be extended or mapped when backed by an ordinary file.
+ * \param MaximumSize The maximum size, in bytes, of the section. The actual size when backed by the paging file,
+ * or the maximum the file can be extended or mapped when backed by an ordinary file.
  * \param SectionPageProtection Specifies the protection to place on each page in the section.
  * \param AllocationAttributes A bitmask of SEC_XXX flags that determines the allocation attributes of the section.
- * \param FileHandle Optionally specifies a handle for an open file object. If the value of FileHandle is NULL, the section is backed by the paging file. Otherwise, the section is backed by the specified file.
+ * \param FileHandle Optionally specifies a handle for an open file object. If the value of FileHandle is NULL,
+ * the section is backed by the paging file. Otherwise, the section is backed by the specified file.
  * \param ExtendedParameters An optional pointer to one or more extended parameters of type MEM_EXTENDED_PARAMETER.
  * \param ExtendedParameterCount Specifies the number of elements in the ExtendedParameters array.
  * \return NTSTATUS Successful or errant status.
  * \sa https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatesection
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1204,6 +1442,7 @@ NtCreateSectionEx(
  * \return NTSTATUS Successful or errant status.
  * \sa https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwopensection
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1221,14 +1460,15 @@ NtOpenSection(
  * \param BaseAddress A pointer to a variable that receives the base address of the view. If the value is not NULL, the view is allocated starting at the specified virtual address rounded down to the next 64-kilobyte address boundary.
  * \param ZeroBits The number of high-order address bits that must be zero in the base address of the section view. The value of this parameter must be less than 21 and is used only if BaseAddress is NULL.
  * \param CommitSize Specifies the size, in bytes, of the initially committed region of the view. CommitSize is meaningful only for page-file backed sections and is rounded up to the nearest multiple of PAGE_SIZE.
- * \param SectionOffset A pointer to a variable that receives the offset, in bytes, from the beginning of the section to the view. 
- * \param ViewSize A pointer to a variable that specifies the size of the view in bytes. If the initial value is zero, NtMapViewOfSection maps a view of the section that starts at SectionOffset and continues to the end of the section. 
- * \param InheritDisposition A value that specifies how the view is to be shared with child processes. 
- * \param AllocationType Specifies the type of allocation to be performed for the specified region of pages. The valid flags are MEM_RESERVE, MEM_TOP_DOWN, MEM_LARGE_PAGES, MEM_DIFFERENT_IMAGE_BASE_OK and MEM_REPLACE_PLACEHOLDER. Although MEM_COMMIT is not allowed, it is implied unless MEM_RESERVE is specified. 
+ * \param SectionOffset A pointer to a variable that receives the offset, in bytes, from the beginning of the section to the view.
+ * \param ViewSize A pointer to a variable that specifies the size of the view in bytes. If the initial value is zero, NtMapViewOfSection maps a view of the section that starts at SectionOffset and continues to the end of the section.
+ * \param InheritDisposition A value that specifies how the view is to be shared with child processes.
+ * \param AllocationType Specifies the type of allocation to be performed for the specified region of pages. The valid flags are MEM_RESERVE, MEM_TOP_DOWN, MEM_LARGE_PAGES, MEM_DIFFERENT_IMAGE_BASE_OK and MEM_REPLACE_PLACEHOLDER. Although MEM_COMMIT is not allowed, it is implied unless MEM_RESERVE is specified.
  * \param PageProtection Specifies the page protection to be applied to the mapped view. Not used with SEC_IMAGE, must be set to PAGE_READONLY for SEC_IMAGE_NO_EXECUTE. For non-image sections, the value must be compatible with the section's page protection from NtCreateSection.
  * \return NTSTATUS Successful or errant status.
  * \sa https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwmapviewofsection
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1261,6 +1501,7 @@ NtMapViewOfSection(
  * \return NTSTATUS Successful or errant status.
  * \sa https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwmapviewofsectionex
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1285,6 +1526,7 @@ NtMapViewOfSectionEx(
  * \return NTSTATUS Successful or errant status.
  * \sa https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwunmapviewofsection
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1303,6 +1545,7 @@ NtUnmapViewOfSection(
  * \return NTSTATUS Successful or errant status.
  * \sa https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwunmapviewofsection
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1313,6 +1556,14 @@ NtUnmapViewOfSectionEx(
     );
 #endif // (PHNT_VERSION >= PHNT_WINDOWS_8)
 
+/**
+ * The NtExtendSection routine extends the size of an existing section object.
+ *
+ * \param SectionHandle A handle to the section object to extend.
+ * \param NewSectionSize A pointer to a LARGE_INTEGER that specifies the new section size, in bytes.
+ * \return NTSTATUS Successful or errant status.
+ */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1332,6 +1583,7 @@ NtExtendSection(
  * \return NTSTATUS Successful or errant status.
  * \sa https://learn.microsoft.com/en-us/windows/win32/devnotes/ntquerysection
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1350,6 +1602,7 @@ NtQuerySection(
  * \param File2MappedAsFile A pointer to the base address of the second file mapped as a file.
  * \return NTSTATUS Returns STATUS_SUCCESS if the files are the same; otherwise, an appropriate NTSTATUS error code.
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1387,21 +1640,21 @@ NtAreMappedFilesTheSame(
 // private
 typedef enum _PARTITION_INFORMATION_CLASS
 {
-    SystemMemoryPartitionInformation, // q: MEMORY_PARTITION_CONFIGURATION_INFORMATION
-    SystemMemoryPartitionMoveMemory, // s: MEMORY_PARTITION_TRANSFER_INFORMATION
-    SystemMemoryPartitionAddPagefile, // s: MEMORY_PARTITION_PAGEFILE_INFORMATION
-    SystemMemoryPartitionCombineMemory, // q; s: MEMORY_PARTITION_PAGE_COMBINE_INFORMATION
-    SystemMemoryPartitionInitialAddMemory, // q; s: MEMORY_PARTITION_INITIAL_ADD_INFORMATION
-    SystemMemoryPartitionGetMemoryEvents, // MEMORY_PARTITION_MEMORY_EVENTS_INFORMATION // since REDSTONE2
-    SystemMemoryPartitionSetAttributes,
-    SystemMemoryPartitionNodeInformation,
-    SystemMemoryPartitionCreateLargePages,
-    SystemMemoryPartitionDedicatedMemoryInformation,
-    SystemMemoryPartitionOpenDedicatedMemory, // 10
-    SystemMemoryPartitionMemoryChargeAttributes,
-    SystemMemoryPartitionClearAttributes,
-    SystemMemoryPartitionSetMemoryThresholds, // since WIN11
-    SystemMemoryPartitionMemoryListCommand, // since 24H2
+    SystemMemoryPartitionInformation,                   // q: MEMORY_PARTITION_CONFIGURATION_INFORMATION
+    SystemMemoryPartitionMoveMemory,                    // s: MEMORY_PARTITION_TRANSFER_INFORMATION
+    SystemMemoryPartitionAddPagefile,                   // s: MEMORY_PARTITION_PAGEFILE_INFORMATION
+    SystemMemoryPartitionCombineMemory,                 // qs: MEMORY_PARTITION_PAGE_COMBINE_INFORMATION
+    SystemMemoryPartitionInitialAddMemory,              // qs: MEMORY_PARTITION_INITIAL_ADD_INFORMATION
+    SystemMemoryPartitionGetMemoryEvents,               // qs: MEMORY_PARTITION_MEMORY_EVENTS_INFORMATION // since REDSTONE2
+    SystemMemoryPartitionSetAttributes,                 // s: MEMORY_PARTITION_ATTRIBUTES_INFORMATION
+    SystemMemoryPartitionNodeInformation,               // qs: MEMORY_PARTITION_NODE_INFORMATION
+    SystemMemoryPartitionCreateLargePages,              // qs: MEMORY_PARTITION_LARGE_PAGE_INFORMATION
+    SystemMemoryPartitionDedicatedMemoryInformation,    // q: MEMORY_PARTITION_DEDICATED_MEMORY_INFORMATION (variable-length)
+    SystemMemoryPartitionOpenDedicatedMemory,           // qs: MEMORY_PARTITION_OPEN_DEDICATED_MEMORY_INFORMATION // 10
+    SystemMemoryPartitionMemoryChargeAttributes,        // qs: MEMORY_PARTITION_MEMORY_CHARGE_INFORMATION
+    SystemMemoryPartitionClearAttributes,               // s: MEMORY_PARTITION_ATTRIBUTES_INFORMATION
+    SystemMemoryPartitionSetMemoryThresholds,           // s: MEMORY_PARTITION_MEMORY_THRESHOLDS // since WIN11
+    SystemMemoryPartitionMemoryListCommand,             // s: MEMORY_PARTITION_MEMORY_LIST_COMMAND // since 24H2
     SystemMemoryPartitionMax
 } PARTITION_INFORMATION_CLASS, *PPARTITION_INFORMATION_CLASS;
 #else
@@ -1507,9 +1760,81 @@ typedef struct _MEMORY_PARTITION_MEMORY_EVENTS_INFORMATION
     HANDLE MaximumCommitCondition; // \KernelObjects\MaximumCommitCondition
 } MEMORY_PARTITION_MEMORY_EVENTS_INFORMATION, *PMEMORY_PARTITION_MEMORY_EVENTS_INFORMATION;
 
+// private
+typedef struct _MEMORY_PARTITION_ATTRIBUTES_INFORMATION
+{
+    ULONG64 Attributes;
+} MEMORY_PARTITION_ATTRIBUTES_INFORMATION, *PMEMORY_PARTITION_ATTRIBUTES_INFORMATION;
+
+// private
+typedef struct _MEMORY_PARTITION_NODE_INFORMATION
+{
+    ULONG NumberOfNodes;
+    ULONG Reserved;
+    PVOID NodeInformation;
+} MEMORY_PARTITION_NODE_INFORMATION, *PMEMORY_PARTITION_NODE_INFORMATION;
+
+// private
+typedef struct _MEMORY_PARTITION_LARGE_PAGE_INFORMATION
+{
+    ULONG Flags;
+    ULONG NumaNode;
+    SIZE_T LargePageSizeInBytes;
+    SIZE_T NumberOfLargePages;
+    SIZE_T NumberOfPagesCreated;
+} MEMORY_PARTITION_LARGE_PAGE_INFORMATION, *PMEMORY_PARTITION_LARGE_PAGE_INFORMATION;
+
+// private
+//typedef struct _MEMORY_PARTITION_DEDICATED_MEMORY_INFORMATION
+//{
+//    ULONG NextEntryOffset;
+//} MEMORY_PARTITION_DEDICATED_MEMORY_INFORMATION, *PMEMORY_PARTITION_DEDICATED_MEMORY_INFORMATION;
+
+// private
+typedef struct _MEMORY_PARTITION_OPEN_DEDICATED_MEMORY_INFORMATION
+{
+    ULONGLONG DedicatedMemoryTypeId;
+    ACCESS_MASK DesiredAccess;
+    ULONG HandleAttributes;
+    HANDLE PartitionHandle;
+} MEMORY_PARTITION_OPEN_DEDICATED_MEMORY_INFORMATION, *PMEMORY_PARTITION_OPEN_DEDICATED_MEMORY_INFORMATION;
+
+// private
+typedef struct _MEMORY_PARTITION_MEMORY_CHARGE_INFORMATION
+{
+    ULONG Flags;
+    ULONG NumberOfCharges;
+    UCHAR Charges[ANYSIZE_ARRAY]; // Array of 40-byte charge records.
+} MEMORY_PARTITION_MEMORY_CHARGE_INFORMATION, *PMEMORY_PARTITION_MEMORY_CHARGE_INFORMATION;
+
+// private
+typedef struct _MEMORY_PARTITION_MEMORY_THRESHOLDS
+{
+    ULONG Flags;
+    ULONG Reserved;
+    SIZE_T LowThreshold;
+    SIZE_T HighThreshold;
+} MEMORY_PARTITION_MEMORY_THRESHOLDS, *PMEMORY_PARTITION_MEMORY_THRESHOLDS;
+
+// private
+typedef struct _MEMORY_PARTITION_MEMORY_LIST_COMMAND
+{
+    ULONG Command;
+} MEMORY_PARTITION_MEMORY_LIST_COMMAND, *PMEMORY_PARTITION_MEMORY_LIST_COMMAND;
+
 #if (PHNT_MODE != PHNT_MODE_KERNEL)
 #if (PHNT_VERSION >= PHNT_WINDOWS_10)
 
+/**
+ * The NtCreatePartition routine creates a memory partition object.
+ *
+ * \param ParentPartitionHandle An optional handle to the parent partition. If NULL, the implementation uses the default parent context.
+ * \param PartitionHandle A pointer to a variable that receives a handle to the created partition object.
+ * \param DesiredAccess The access mask that specifies the requested access to the partition object.
+ * \param ObjectAttributes An optional pointer to an OBJECT_ATTRIBUTES structure that specifies the object name and attributes.
+ * \return NTSTATUS Successful or errant status.
+ */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1520,6 +1845,15 @@ NtCreatePartition(
     _In_opt_ PCOBJECT_ATTRIBUTES ObjectAttributes
     );
 
+/**
+ * The NtOpenPartition routine opens a handle to an existing memory partition object.
+ *
+ * \param PartitionHandle A pointer to a variable that receives a handle to the opened partition object.
+ * \param DesiredAccess The access mask that specifies the requested access to the partition object.
+ * \param ObjectAttributes A pointer to an OBJECT_ATTRIBUTES structure that specifies the object name and attributes.
+ * \return NTSTATUS Successful or errant status.
+ */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1529,6 +1863,17 @@ NtOpenPartition(
     _In_ PCOBJECT_ATTRIBUTES ObjectAttributes
     );
 
+/**
+ * The NtManagePartition routine queries or updates partition state according to the specified partition information class.
+ *
+ * \param TargetHandle A handle to the target partition object.
+ * \param SourceHandle An optional handle to a source partition object for operations that transfer or reference state across partitions.
+ * \param PartitionInformationClass The partition information class that selects the operation and buffer contract.
+ * \param PartitionInformation A pointer to an input/output buffer whose format depends on PartitionInformationClass.
+ * \param PartitionInformationLength The size, in bytes, of the buffer pointed to by PartitionInformation.
+ * \return NTSTATUS Successful or errant status.
+ */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1555,6 +1900,7 @@ NtManagePartition(
  * \return NTSTATUS Successful or errant status.
  * \sa https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapuserphysicalpages
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1573,6 +1919,7 @@ NtMapUserPhysicalPages(
  * \return NTSTATUS Successful or errant status.
  * \sa https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-mapuserphysicalpagesscatter
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1591,6 +1938,7 @@ NtMapUserPhysicalPagesScatter(
  * \return NTSTATUS Successful or errant status.
  * \sa https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-allocateuserphysicalpages
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1612,6 +1960,7 @@ NtAllocateUserPhysicalPages(
  * \return NTSTATUS Successful or errant status.
  * \sa https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-allocateuserphysicalpages
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1633,6 +1982,7 @@ NtAllocateUserPhysicalPagesEx(
  * \return NTSTATUS Successful or errant status.
  * \sa https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-freeuserphysicalpages
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1659,6 +2009,7 @@ NtFreeUserPhysicalPages(
  * \return NTSTATUS Successful or errant status.
  * \see https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-getwritewatch
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1681,6 +2032,7 @@ NtGetWriteWatch(
  * \return NTSTATUS Successful or errant status.
  * \see https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-resetwritewatch
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1690,6 +2042,17 @@ NtResetWriteWatch(
     _In_ SIZE_T RegionSize
     );
 
+/**
+ * Creates or extends a paging file.
+ *
+ * \param PageFileName The NT path of the paging file to create or extend.
+ * \param MinimumSize A pointer to the minimum size of the paging file, in bytes.
+ * \param MaximumSize A pointer to the maximum size of the paging file, in bytes.
+ * \param Priority The paging file priority.
+ * \return NTSTATUS Successful or errant status.
+ * \remarks The caller must have the SeCreatePagefilePrivilege privilege.
+ */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1710,6 +2073,7 @@ NtCreatePagingFile(
  * \remarks Applications should call NtFlushInstructionCache if they generate or modify code in memory. The CPU cannot detect the change, and may execute the old code it cached.
  * \see https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-flushinstructioncache
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1724,6 +2088,7 @@ NtFlushInstructionCache(
  *
  * \return NTSTATUS Successful or errant status.
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1737,6 +2102,7 @@ NtFlushWriteBuffer(
  * \return NTSTATUS Successful or errant status.
  * \see https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-flushprocesswritebuffers
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1770,6 +2136,7 @@ NtFlushProcessWriteBuffers(
  * \return NTSTATUS Successful or errant status.
  * \see https://learn.microsoft.com/en-us/windows/win32/api/enclaveapi/nf-enclaveapi-createenclave
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1796,10 +2163,11 @@ NtCreateEnclave(
  * \param PageInformation A pointer to information that describes the pages that you want to add to the enclave.
  * \param PageInformationLength The length of the structure that the PageInformation parameter points to, in bytes.
  * \param NumberOfBytesWritten A pointer to a variable that receives the number of bytes that NtLoadEnclaveData copied into the enclave.
- * \param EnclaveError An optional pointer to a variable that receives an enclave error code that is architecture-specific. 
+ * \param EnclaveError An optional pointer to a variable that receives an enclave error code that is architecture-specific.
  * \return NTSTATUS Successful or errant status.
  * \see https://learn.microsoft.com/en-us/windows/win32/api/enclaveapi/nf-enclaveapi-loadenclavedata
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1826,6 +2194,7 @@ NtLoadEnclaveData(
  * \return NTSTATUS Successful or errant status.
  * \see https://learn.microsoft.com/en-us/windows/win32/api/enclaveapi/nf-enclaveapi-initializeenclave
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1851,6 +2220,7 @@ NtInitializeEnclave(
  * \return NTSTATUS Successful or errant status.
  * \see https://learn.microsoft.com/en-us/windows/win32/api/enclaveapi/nf-enclaveapi-terminateenclave
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -1875,6 +2245,7 @@ NtTerminateEnclave(
  * \return NTSTATUS Successful or errant status.
  * \see https://learn.microsoft.com/en-us/windows/win32/api/enclaveapi/nf-enclaveapi-callenclave
  */
+_Kernel_entry_
 NTSYSCALLAPI
 NTSTATUS
 NTAPI

@@ -66,14 +66,16 @@ typedef struct _PH_THREAD_STACK_CONTEXT
 
     HWND TaskDialogHandle;
 
-    NTSTATUS WalkStatus;
     PPH_STRING StatusMessage;
     PPH_STRING StatusContent;
     PH_QUEUED_LOCK StatusLock;
 
     BOOLEAN SymbolProgressMarquee;
     BOOLEAN SymbolProgressReset;
+
     ULONG SymbolProgress;
+    NTSTATUS WalkStatus;
+    LONG WindowDpi;
 
     PH_LAYOUT_MANAGER LayoutManager;
 
@@ -162,7 +164,7 @@ VOID PhpFreeThreadStackItem(
     );
 
 NTSTATUS PhpRefreshThreadStack(
-    _In_ HWND hwnd,
+    _In_ HWND WindowHandle,
     _In_ PPH_THREAD_STACK_CONTEXT ThreadStackContext
     );
 
@@ -275,7 +277,7 @@ VOID ThreadStackLoadSettingsTreeList(
 {
     PPH_STRING settings;
 
-    settings = PhGetStringSetting(L"ThreadStackTreeListColumns");
+    settings = PhGetStringSetting(SETTING_THREAD_STACK_TREE_LIST_COLUMNS);
     PhCmLoadSettings(Context->TreeNewHandle, &settings->sr);
     PhDereferenceObject(settings);
 }
@@ -287,7 +289,7 @@ VOID ThreadStackSaveSettingsTreeList(
     PPH_STRING settings;
 
     settings = PhCmSaveSettings(Context->TreeNewHandle);
-    PhSetStringSetting2(L"ThreadStackTreeListColumns", &settings->sr);
+    PhSetStringSetting2(SETTING_THREAD_STACK_TREE_LIST_COLUMNS, &settings->sr);
     PhDereferenceObject(settings);
 }
 
@@ -402,7 +404,7 @@ VOID UpdateThreadStackNode(
 }
 
 BOOLEAN NTAPI ThreadStackTreeNewCallback(
-    _In_ HWND hwnd,
+    _In_ HWND WindowHandle,
     _In_ PH_TREENEW_MESSAGE Message,
     _In_ PVOID Parameter1,
     _In_ PVOID Parameter2,
@@ -421,7 +423,7 @@ BOOLEAN NTAPI ThreadStackTreeNewCallback(
 
             if (!getChildren->Node)
             {
-                static PVOID sortFunctions[] =
+                static CONST _CoreCrtSecureSearchSortCompareFunction sortFunctions[] =
                 {
                     SORT_FUNCTION(Index),
                     SORT_FUNCTION(Symbol),
@@ -438,7 +440,7 @@ BOOLEAN NTAPI ThreadStackTreeNewCallback(
                     SORT_FUNCTION(Architecture),
                     SORT_FUNCTION(FrameDistance),
                 };
-                int (__cdecl *sortFunction)(void *, const void *, const void *);
+                _CoreCrtSecureSearchSortCompareFunction sortFunction;
 
                 static_assert(RTL_NUMBER_OF(sortFunctions) == TREE_COLUMN_ITEM_MAXIMUM, "SortFunctions must equal maximum.");
 
@@ -535,15 +537,15 @@ BOOLEAN NTAPI ThreadStackTreeNewCallback(
 
             if (context->HighlightInlineFrames && PhIsStackFrameTypeInline(node->StackFrame.InlineFrameContext))
             {
-                getNodeColor->BackColor = PhGetIntegerSetting(L"ColorInlineThreadStack");
+                getNodeColor->BackColor = PhGetIntegerSetting(SETTING_COLOR_INLINE_THREAD_STACK);
             }
             else if (context->HighlightSystemPages && (ULONG_PTR)node->StackFrame.PcAddress > PhSystemBasicInformation.MaximumUserModeAddress)
             {
-                getNodeColor->BackColor = PhGetIntegerSetting(L"ColorSystemThreadStack");
+                getNodeColor->BackColor = PhGetIntegerSetting(SETTING_COLOR_SYSTEM_THREAD_STACK);
             }
             else if (context->HighlightUserPages && (ULONG_PTR)node->StackFrame.PcAddress <= PhSystemBasicInformation.MaximumUserModeAddress)
             {
-                getNodeColor->BackColor = PhGetIntegerSetting(L"ColorUserThreadStack");
+                getNodeColor->BackColor = PhGetIntegerSetting(SETTING_COLOR_USER_THREAD_STACK);
             }
 
             getNodeColor->Flags = TN_AUTO_FORECOLOR;
@@ -557,7 +559,7 @@ BOOLEAN NTAPI ThreadStackTreeNewCallback(
             context->TreeNewSortOrder = sorting->SortOrder;
 
             // Force a rebuild to sort the items.
-            TreeNew_NodesStructured(hwnd);
+            TreeNew_NodesStructured(WindowHandle);
         }
         return TRUE;
     case TreeNewContextMenu:
@@ -597,14 +599,21 @@ BOOLEAN NTAPI ThreadStackTreeNewCallback(
         {
             PH_TN_COLUMN_MENU_DATA data;
 
-            data.TreeNewHandle = hwnd;
+            data.TreeNewHandle = WindowHandle;
             data.MouseEvent = Parameter1;
             data.DefaultSortColumn = 0;
             data.DefaultSortOrder = AscendingSortOrder;
             PhInitializeTreeNewColumnMenuEx(&data, PH_TN_COLUMN_MENU_SHOW_RESET_SORT);
 
-            data.Selection = PhShowEMenu(data.Menu, hwnd, PH_EMENU_SHOW_LEFTRIGHT,
-                PH_ALIGN_LEFT | PH_ALIGN_TOP, data.MouseEvent->ScreenLocation.x, data.MouseEvent->ScreenLocation.y);
+            data.Selection = PhShowEMenu(
+                data.Menu,
+                WindowHandle,
+                PH_EMENU_SHOW_LEFTRIGHT,
+                PH_ALIGN_LEFT | PH_ALIGN_TOP,
+                data.MouseEvent->ScreenLocation.x,
+                data.MouseEvent->ScreenLocation.y
+                );
+
             PhHandleTreeNewColumnMenu(&data);
             PhDeleteTreeNewColumnMenu(&data);
         }
@@ -769,6 +778,7 @@ BOOLEAN GetSelectedThreadStackNodes(
     return FALSE;
 }
 
+_Function_class_(PH_TN_FILTER_FUNCTION)
 BOOLEAN PhpThreadStackTreeFilterCallback(
     _In_ PPH_TREENEW_NODE Node,
     _In_ PVOID Context
@@ -813,8 +823,8 @@ VOID InitializeThreadStackTree(
     PhAddTreeNewColumn(Context->TreeNewHandle, PH_STACK_TREE_COLUMN_PARAMETER4, FALSE, L"Stack parameter #4", 100, PH_ALIGN_LEFT, ULONG_MAX, 0);
     PhAddTreeNewColumn(Context->TreeNewHandle, PH_STACK_TREE_COLUMN_CONTROLADDRESS, FALSE, L"Control address", 100, PH_ALIGN_LEFT, ULONG_MAX, 0);
     PhAddTreeNewColumn(Context->TreeNewHandle, PH_STACK_TREE_COLUMN_RETURNADDRESS, FALSE, L"Return address", 100, PH_ALIGN_LEFT, ULONG_MAX, 0);
-    PhAddTreeNewColumn(Context->TreeNewHandle, PH_STACK_TREE_COLUMN_FILENAME, FALSE, L"File name", 100, PH_ALIGN_LEFT, ULONG_MAX, 0);
-    PhAddTreeNewColumn(Context->TreeNewHandle, PH_STACK_TREE_COLUMN_LINETEXT, FALSE, L"Line number", 100, PH_ALIGN_LEFT, ULONG_MAX, 0);
+    PhAddTreeNewColumn(Context->TreeNewHandle, PH_STACK_TREE_COLUMN_FILENAME, FALSE, L"File name", 100, PH_ALIGN_LEFT, ULONG_MAX, DT_PATH_ELLIPSIS);
+    PhAddTreeNewColumn(Context->TreeNewHandle, PH_STACK_TREE_COLUMN_LINETEXT, FALSE, L"Line number", 100, PH_ALIGN_LEFT, ULONG_MAX, DT_PATH_ELLIPSIS);
     PhAddTreeNewColumn(Context->TreeNewHandle, PH_STACK_TREE_COLUMN_ARCHITECTURE, FALSE, L"Architecture", 100, PH_ALIGN_LEFT, ULONG_MAX, 0);
     PhAddTreeNewColumn(Context->TreeNewHandle, PH_STACK_TREE_COLUMN_FRAMEDISTANCE, FALSE, L"Frame distance", 100, PH_ALIGN_RIGHT, ULONG_MAX, DT_RIGHT);
 
@@ -970,9 +980,10 @@ INT_PTR CALLBACK PhpThreadStackDlgProc(
 
             context->WindowHandle = hwndDlg;
             context->TreeNewHandle = GetDlgItem(hwndDlg, IDC_TREELIST);
-            context->HighlightUserPages = !!PhGetIntegerSetting(L"UseColorUserThreadStack");
-            context->HighlightSystemPages = !!PhGetIntegerSetting(L"UseColorSystemThreadStack");
-            context->HighlightInlineFrames = !!PhGetIntegerSetting(L"UseColorInlineThreadStack");
+            context->HighlightUserPages = !!PhGetIntegerSetting(SETTING_USE_COLOR_USER_THREAD_STACK);
+            context->HighlightSystemPages = !!PhGetIntegerSetting(SETTING_USE_COLOR_SYSTEM_THREAD_STACK);
+            context->HighlightInlineFrames = !!PhGetIntegerSetting(SETTING_USE_COLOR_INLINE_THREAD_STACK);
+            context->WindowDpi = PhGetWindowDpi(hwndDlg);
             PhSetWindowExStyle(context->TreeNewHandle, WS_EX_CLIENTEDGE, 0);
 
             PhSetApplicationWindowIcon(hwndDlg);
@@ -1001,8 +1012,10 @@ INT_PTR CALLBACK PhpThreadStackDlgProc(
                 MinimumSize.left = 0;
             }
 
-            PhLoadWindowPlacementFromSetting(NULL, L"ThreadStackWindowSize", hwndDlg);
-            PhCenterWindow(hwndDlg, GetParent(hwndDlg));
+            if (PhValidWindowPlacementFromSetting(SETTING_THREAD_STACK_WINDOW_POSITION))
+                PhLoadWindowPlacementFromSetting(SETTING_THREAD_STACK_WINDOW_POSITION, SETTING_THREAD_STACK_WINDOW_SIZE, hwndDlg);
+            else
+                PhCenterWindow(hwndDlg, GetParent(hwndDlg));
             PhSetDialogFocus(hwndDlg, context->TreeNewHandle);
 
             PhInitializeWindowTheme(hwndDlg, PhEnableThemeSupport);
@@ -1055,7 +1068,7 @@ INT_PTR CALLBACK PhpThreadStackDlgProc(
             for (ULONG i = 0; i < context->List->Count; i++)
                 PhpFreeThreadStackItem(context->List->Items[i]);
 
-            PhSaveWindowPlacementToSetting(NULL, L"ThreadStackWindowSize", hwndDlg);
+            PhSaveWindowPlacementToSetting(SETTING_THREAD_STACK_WINDOW_POSITION, SETTING_THREAD_STACK_WINDOW_SIZE, hwndDlg);
 
             PhRemoveWindowContext(hwndDlg, PH_WINDOW_CONTEXT_DEFAULT);
             PhDereferenceObject(context);
@@ -1122,7 +1135,7 @@ INT_PTR CALLBACK PhpThreadStackDlgProc(
                                     {
                                         PhShellExecuteUserString(
                                             hwndDlg,
-                                            L"ProgramInspectExecutables",
+                                            SETTING_PROGRAM_INSPECT_EXECUTABLES,
                                             PhGetString(selectedNode->FileNameString),
                                             FALSE,
                                             L"Make sure the PE Viewer executable file is present."
@@ -1136,7 +1149,7 @@ INT_PTR CALLBACK PhpThreadStackDlgProc(
                                     {
                                         PhShellExecuteUserString(
                                             hwndDlg,
-                                            L"FileBrowseExecutable",
+                                            SETTING_FILE_BROWSE_EXECUTABLE,
                                             PhGetString(selectedNode->FileNameString),
                                             FALSE,
                                             L"Make sure the Explorer executable file is present."
@@ -1170,7 +1183,7 @@ INT_PTR CALLBACK PhpThreadStackDlgProc(
                         {
                             PhShellExecuteUserString(
                                 hwndDlg,
-                                L"ProgramInspectExecutables",
+                                SETTING_PROGRAM_INSPECT_EXECUTABLES,
                                 PhGetString(selectedNode->FileNameString),
                                 FALSE,
                                 L"Make sure the PE Viewer executable file is present."
@@ -1191,7 +1204,7 @@ INT_PTR CALLBACK PhpThreadStackDlgProc(
                     PPH_EMENU_ITEM inlineItem;
                     PPH_EMENU_ITEM selectedItem;
 
-                    if (!GetWindowRect(GET_WM_COMMAND_HWND(wParam, lParam), &rect))
+                    if (!PhGetWindowRect(GET_WM_COMMAND_HWND(wParam, lParam), &rect))
                         break;
 
                     menu = PhCreateEMenu();
@@ -1242,23 +1255,35 @@ INT_PTR CALLBACK PhpThreadStackDlgProc(
                         else if (selectedItem->Id == 4)
                         {
                             context->HighlightUserPages = !context->HighlightUserPages;
-                            PhSetIntegerSetting(L"UseColorUserThreadStack", context->HighlightUserPages);
+                            PhSetIntegerSetting(SETTING_USE_COLOR_USER_THREAD_STACK, context->HighlightUserPages);
                         }
                         else if (selectedItem->Id == 5)
                         {
                             context->HighlightSystemPages = !context->HighlightSystemPages;
-                            PhSetIntegerSetting(L"UseColorSystemThreadStack", context->HighlightSystemPages);
+                            PhSetIntegerSetting(SETTING_USE_COLOR_SYSTEM_THREAD_STACK, context->HighlightSystemPages);
                         }
                         else if (selectedItem->Id == 6)
                         {
                             context->HighlightInlineFrames = !context->HighlightInlineFrames;
-                            PhSetIntegerSetting(L"UseColorInlineThreadStack", context->HighlightInlineFrames);
+                            PhSetIntegerSetting(SETTING_USE_COLOR_INLINE_THREAD_STACK, context->HighlightInlineFrames);
                         }
 
                         PhApplyTreeNewFilters(&context->TreeFilterSupport);
                     }
 
                     PhDestroyEMenu(menu);
+                }
+                break;
+            case IDC_COPY:
+                {
+                    PPH_STRING text;
+
+                    TreeNew_SelectRange(context->TreeNewHandle, 0, -1);
+                    text = PhGetTreeNewText(context->TreeNewHandle, 0);
+                    TreeNew_DeselectRange(context->TreeNewHandle, 0, -1);
+
+                    PhSetClipboardString(context->TreeNewHandle, &text->sr);
+                    PhDereferenceObject(text);
                 }
                 break;
             }
@@ -1302,6 +1327,8 @@ VOID PhpFreeThreadStackItem(
     PhFree(StackItem);
 }
 
+_Function_class_(PH_WALK_THREAD_STACK_CALLBACK)
+_Function_class_(PH_PLUGIN_WALK_THREAD_STACK_CALLBACK)
 BOOLEAN NTAPI PhpWalkThreadStackCallback(
     _In_ PPH_THREAD_STACK_FRAME StackFrame,
     _In_ PVOID Context
@@ -1319,8 +1346,8 @@ BOOLEAN NTAPI PhpWalkThreadStackCallback(
     if (threadStackContext->StopWalk)
         return FALSE;
 
-    enableStackFrameInlineInfo = !!PhGetIntegerSetting(L"EnableThreadStackInlineSymbols");
-    enableStackFrameLineInfo = !!PhGetIntegerSetting(L"EnableThreadStackLineInformation");
+    enableStackFrameInlineInfo = !!PhGetIntegerSetting(SETTING_ENABLE_THREAD_STACK_INLINE_SYMBOLS);
+    enableStackFrameLineInfo = !!PhGetIntegerSetting(SETTING_ENABLE_THREAD_STACK_LINE_INFORMATION);
 
     PhAcquireQueuedLockExclusive(&threadStackContext->StatusLock);
     {
@@ -1658,9 +1685,10 @@ HRESULT CALLBACK PhpThreadStackTaskDialogCallback(
     case TDN_DIALOG_CONSTRUCTED:
         {
             context->TaskDialogHandle = hwndDlg;
+            context->WindowDpi = PhGetWindowDpi(hwndDlg);
 
             PhSetApplicationWindowIcon(hwndDlg);
-            //SendMessage(hwndDlg, TDM_UPDATE_ICON, TDIE_ICON_MAIN, (LPARAM)PhGetApplicationIcon(FALSE));
+            //SendMessage(hwndDlg, TDM_UPDATE_ICON, TDIE_ICON_MAIN, (LPARAM)PhGetApplicationIcon(FALSE, PhGetWindowDpi(hwndDlg)));
 
             SendMessage(hwndDlg, TDM_SET_MARQUEE_PROGRESS_BAR, TRUE, 0);
             SendMessage(hwndDlg, TDM_SET_PROGRESS_BAR_MARQUEE, TRUE, 1);
@@ -1789,7 +1817,7 @@ BOOLEAN PhpShowThreadStackWindow(
         TDF_POSITION_RELATIVE_TO_WINDOW | TDF_SHOW_MARQUEE_PROGRESS_BAR |
         TDF_CALLBACK_TIMER;
     config.dwCommonButtons = TDCBF_CANCEL_BUTTON;
-    config.hMainIcon = PhGetApplicationIcon(FALSE);
+    config.hMainIcon = PhGetApplicationIcon(FALSE, Context->WindowDpi);
     config.pfCallback = PhpThreadStackTaskDialogCallback;
     config.lpCallbackData = (LONG_PTR)Context;
     config.hwndParent = Context->WindowHandle;

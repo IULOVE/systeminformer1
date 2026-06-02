@@ -12,7 +12,7 @@ static std::unordered_map<ULONG, ProcessInfo> ProcessesHashTable;
 
 static ProcessInfo* GetProcessInfo(
     _In_ ULONG ProcessId
-    )
+    ) noexcept
 {
     auto result = ProcessesHashTable.emplace(ProcessId, ProcessInfo());
     ProcessInfo* processInfo = &result.first->second;
@@ -35,7 +35,7 @@ static ProcessInfo* GetProcessInfo(
 // as long as we're still holding a handle to it.
 static void CheckForTerminatedRealtimeProcesses(
     std::vector<std::pair<ULONG, uint64_t>>* terminatedProcesses
-    )
+    ) noexcept
 {
     for (auto& pair : ProcessesHashTable)
     {
@@ -56,7 +56,7 @@ static void CheckForTerminatedRealtimeProcesses(
     }
 }
 
-static void HandleTerminatedProcess(ULONG processId)
+static void HandleTerminatedProcess(ULONG processId) noexcept
 {
     auto iter = ProcessesHashTable.find(processId);
     if (iter == ProcessesHashTable.end())
@@ -73,7 +73,7 @@ static void AddPresents(
     bool checkStopQpc,
     ULONGLONG stopQpc,
     bool* hitStopQpc
-    )
+    ) noexcept
 {
     size_t i = *presentEventIndex;
 
@@ -124,7 +124,7 @@ static void AddPresents(
 // Limit the present history stored in SwapChainData to 2 seconds.
 static void PruneHistory(
     std::vector<std::shared_ptr<PresentEvent>> const& presentEvents
-    )
+    ) noexcept
 {
     ULONGLONG latestQpc = presentEvents.empty() ? 0ull : presentEvents.back()->PresentStartTime;
     ULONGLONG minQpc = latestQpc - SecondsDeltaToQpc(2.0);
@@ -238,7 +238,7 @@ done:
 VOID PresentMonUpdateProcessStats(
     _In_ ULONG ProcessId,
     _In_ ProcessInfo const& ProcessInfo
-    )
+    ) noexcept
 {
     // Don't display non-target or empty processes
     if (ProcessInfo.mSwapChain.empty())
@@ -259,26 +259,26 @@ VOID PresentMonUpdateProcessStats(
         auto const& lastPresented = *chain.mPresentHistory[(chain.mNextPresentIndex - 2) % SwapChainData::PRESENT_HISTORY_MAX_COUNT];
         USHORT runtime = static_cast<USHORT>(presentN.Runtime);
         USHORT presentMode = static_cast<USHORT>(presentN.PresentMode);
-        FLOAT cpuAvg;
-        FLOAT dspAvg = 0.0;
-        FLOAT latAvg = 0.0;
-        FLOAT frameLatency = 0;
-        FLOAT framesPerSecond = 0;
-        FLOAT displayLatency = 0;
-        FLOAT displayFramesPerSecond = 0;
-        FLOAT msBetweenPresents;
-        FLOAT msInPresentApi;
-        FLOAT msUntilRenderComplete = 0.0;
-        FLOAT msUntilDisplayed = 0.0;
+        DOUBLE cpuAvg;
+        DOUBLE dspAvg = 0.0;
+        DOUBLE latAvg = 0.0;
+        DOUBLE frameLatency = 0.0;
+        DOUBLE framesPerSecond = 0.0;
+        DOUBLE displayLatency = 0.0;
+        DOUBLE displayFramesPerSecond = 0.0;
+        DOUBLE msBetweenPresents;
+        DOUBLE msInPresentApi;
+        DOUBLE msUntilRenderComplete = 0.0;
+        DOUBLE msUntilDisplayed = 0.0;
 
         cpuAvg = QpcDeltaToSeconds(presentN.PresentStartTime - present0.PresentStartTime) / (chain.mPresentHistoryCount - 1);
-        msBetweenPresents = 1000.f * QpcDeltaToSeconds(presentN.PresentStartTime - lastPresented.PresentStartTime);
-        msInPresentApi = 1000.f * QpcDeltaToSeconds(presentN.PresentStopTime);
+        msBetweenPresents = 1000.0 * QpcDeltaToSeconds(presentN.PresentStartTime - lastPresented.PresentStartTime);
+        msInPresentApi = 1000.0 * QpcDeltaToSeconds(presentN.PresentStopTime);
 
         if (cpuAvg)
         {
-            frameLatency = 1000.f * cpuAvg;
-            framesPerSecond = 1.f / cpuAvg;
+            frameLatency = 1000.0 * cpuAvg;
+            framesPerSecond = 1.0 / cpuAvg;
         }
 
         //if (args.mTrackDisplay)
@@ -317,22 +317,22 @@ VOID PresentMonUpdateProcessStats(
 
         if (latAvg)
         {
-            displayLatency = 1000.f * latAvg;
+            displayLatency = 1000.0 * latAvg;
         }
 
         if (dspAvg)
         {
-            displayFramesPerSecond = 1.f / dspAvg;
+            displayFramesPerSecond = 1.0 / dspAvg;
         }
 
         if (presentN.ReadyTime > 0)
         {
-            msUntilRenderComplete = 1000.f * QpcDeltaToSeconds(presentN.ReadyTime - presentN.PresentStartTime);
+            msUntilRenderComplete = 1000.0 * QpcDeltaToSeconds(presentN.ReadyTime - presentN.PresentStartTime);
         }
 
         if (presentN.FinalState == PresentResult::Presented)
         {
-            msUntilDisplayed = 1000.f * QpcDeltaToSeconds(presentN.ScreenTime - presentN.PresentStartTime);
+            msUntilDisplayed = 1000.0 * QpcDeltaToSeconds(presentN.ScreenTime - presentN.PresentStartTime);
 
             //if (chain.mLastDisplayedPresentIndex != UINT32_MAX)
             //{
@@ -357,10 +357,14 @@ VOID PresentMonUpdateProcessStats(
     }
 }
 
+_Function_class_(USER_THREAD_START_ROUTINE)
 NTSTATUS PresentMonOutputThread(
     _In_ PVOID ThreadParameter
-    )
+    ) noexcept
 {
+    PhSetThreadName(NtCurrentThread(), L"EtPresentMonThread");
+    PhSetThreadBasePriority(NtCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+
     std::vector<std::shared_ptr<PresentEvent>> presentEvents;
     //std::vector<std::shared_ptr<PresentEvent>> lostPresentEvents;
     std::vector<std::pair<ULONG, ULONGLONG>> terminatedProcesses;
@@ -396,7 +400,7 @@ NTSTATUS PresentMonOutputThread(
             break;
 
         // Sleep to reduce overhead.
-        PhDelayExecution(1000);
+        PhDelayExecution(100);
     }
 
     // Close all handles
@@ -417,7 +421,7 @@ NTSTATUS PresentMonOutputThread(
 
 VOID StartOutputThread(
     VOID
-    )
+    ) noexcept
 {
     if (!OutputThreadCreated)
     {
@@ -435,15 +439,16 @@ VOID StartOutputThread(
 
 VOID StopOutputThread(
     VOID
-    )
+    ) noexcept
 {
     InterlockedExchange(&QuitOutputThread, 1);
     //NtWaitForSingleObject(OutputThreadHandle, FALSE, nullptr);
 }
 
+_Function_class_(USER_THREAD_START_ROUTINE)
 static NTSTATUS PresentMonTraceThread(
     _In_ PVOID ThreadParameter
-    )
+    ) noexcept
 {
     ULONG result = 0;
     TRACEHANDLE traceHandle = reinterpret_cast<TRACEHANDLE>(ThreadParameter);
@@ -465,7 +470,9 @@ static NTSTATUS PresentMonTraceThread(
         }
 
         if (!QuitOutputThread)
+        {
             PhDelayExecution(1000);
+        }
     }
 
     return STATUS_SUCCESS;

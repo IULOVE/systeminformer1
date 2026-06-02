@@ -40,6 +40,7 @@ BOOLEAN GeoLiteCheckUpdatePlatformSupported(
     return supported;
 }
 
+_Function_class_(PH_TYPE_DELETE_PROCEDURE)
 VOID GeoLiteUpdateContextDeleteProcedure(
     _In_ PVOID Object,
     _In_ ULONG Flags
@@ -63,9 +64,18 @@ PNETWORK_GEODB_UPDATE_CONTEXT GeoLiteCreateUpdateContext(
     }
 
     context = PhCreateObjectZero(sizeof(NETWORK_GEODB_UPDATE_CONTEXT), UpdateContextType);
+    context->WindowDpi = USER_DEFAULT_SCREEN_DPI;
     context->PortableMode = !!SystemInformer_IsPortableMode();
 
     return context;
+}
+
+VOID GeoLiteUpdateWindowDpi(
+    _In_ PNETWORK_GEODB_UPDATE_CONTEXT Context
+    )
+{
+    Context->WindowDpi = PhGetWindowDpi(Context->DialogHandle);
+    PhSetApplicationWindowIconEx(Context->DialogHandle, Context->WindowDpi);
 }
 
 PPH_STRING GeoLiteCreateUserAgentString(
@@ -78,7 +88,7 @@ PPH_STRING GeoLiteCreateUserAgentString(
     ULONG buildVersion;
     ULONG revisionVersion;
 
-    PhGetPhVersionNumbers(&majorVersion, &minorVersion, &buildVersion, &revisionVersion);
+    PhGetBuildVersionNumbers(&majorVersion, &minorVersion, &buildVersion, &revisionVersion);
     PhInitFormatS(&format[0], L"SystemInformer_");
     PhInitFormatU(&format[1], majorVersion);
     PhInitFormatC(&format[2], L'.');
@@ -111,34 +121,36 @@ NTSTATUS ExtractUpdateToFile(
     )
 {
     NTSTATUS status;
+    PPH_STRING fileName;
     PPH_STRING commandLine;
     PPH_STRING systemDirectory;
     PPH_STRING databaseName;
-    PH_FORMAT format[6];
+    PH_FORMAT format[5];
 
     if (!(systemDirectory = PhGetSystemDirectory()))
         return STATUS_UNSUCCESSFUL;
 
     // tar --extract --file="GeoLite2-Country.tar.gz" --directory="%temp%\\guid" --strip-components=1 */GeoLite2-Country.mmdb
-
+    fileName = PhConcatStringRefZ(&systemDirectory->sr, L"\\tar.exe");
+    PhInitFormatS(&format[0], L" --extract --file=\"");
+    PhInitFormatSR(&format[1], CompressedFileName->sr);
+    PhInitFormatS(&format[2], L"\" --directory=\"");
+    PhInitFormatSR(&format[3], WorkingDirectory->sr);
     databaseName = GeoLiteDatabaseNameFormatString(L"\" --strip-components=1 */GeoLite2-%s.mmdb");
-    PhInitFormatSR(&format[0], systemDirectory->sr);
-    PhInitFormatS(&format[1], L"\\tar.exe --extract --file=\"");
-    PhInitFormatSR(&format[2], CompressedFileName->sr);
-    PhInitFormatS(&format[3], L"\" --directory=\"");
-    PhInitFormatSR(&format[4], WorkingDirectory->sr);
-    PhInitFormatSR(&format[5], databaseName->sr);
-    commandLine = PhFormat(format, RTL_NUMBER_OF(format), 0x100);
+    PhInitFormatSR(&format[4], databaseName->sr);
+    commandLine = PhFormat(format, RTL_NUMBER_OF(format), 0);
 
     status = PhCreateProcessRedirection(
-        commandLine,
+        &fileName->sr,
+        &commandLine->sr,
         NULL,
         NULL
         );
 
     PhDereferenceObject(commandLine);
-    PhDereferenceObject(systemDirectory);
     PhDereferenceObject(databaseName);
+    PhDereferenceObject(fileName);
+    PhDereferenceObject(systemDirectory);
 
     return status;
 }
@@ -365,7 +377,7 @@ BOOLEAN GeoLiteDownloadUpdateToFile(
 
             // Update download status (TODO: Update on timer callback)
             {
-                ULONG percent = bytesTotalDownloaded * 100 / httpContentLength;
+                ULONG percent = PhMultiplyDivide(bytesTotalDownloaded, 100, httpContentLength);
                 PH_FORMAT format[9];
                 WCHAR string[MAX_PATH];
 
@@ -514,6 +526,7 @@ CleanupExit:
     return success;
 }
 
+_Function_class_(USER_THREAD_START_ROUTINE)
 NTSTATUS GeoLiteUpdateThread(
     _In_ PNETWORK_GEODB_UPDATE_CONTEXT Context
     )
@@ -578,8 +591,8 @@ CleanupExit:
 }
 
 LRESULT CALLBACK GeoLiteDialogSubclassProc(
-    _In_ HWND hwndDlg,
-    _In_ UINT uMsg,
+    _In_ HWND WindowHandle,
+    _In_ UINT WindowMessage,
     _In_ WPARAM wParam,
     _In_ LPARAM lParam
     )
@@ -587,29 +600,34 @@ LRESULT CALLBACK GeoLiteDialogSubclassProc(
     PNETWORK_GEODB_UPDATE_CONTEXT context;
     WNDPROC oldWndProc;
 
-    if (!(context = PhGetWindowContext(hwndDlg, UCHAR_MAX)))
+    if (!(context = PhGetWindowContext(WindowHandle, UCHAR_MAX)))
         return 0;
 
     oldWndProc = context->DefaultWindowProc;
 
-    switch (uMsg)
+    switch (WindowMessage)
     {
     case WM_NCDESTROY:
         {
-            PhSetWindowProcedure(hwndDlg, oldWndProc);
-            PhRemoveWindowContext(hwndDlg, UCHAR_MAX);
+            PhSetWindowProcedure(WindowHandle, oldWndProc);
+            PhRemoveWindowContext(WindowHandle, UCHAR_MAX);
 
-            PhUnregisterWindowCallback(hwndDlg);
+            PhUnregisterWindowCallback(WindowHandle);
+        }
+        break;
+    case WM_DPICHANGED:
+        {
+            GeoLiteUpdateWindowDpi(context);
         }
         break;
     case PH_SHOWDIALOG:
         {
-            if (IsMinimized(hwndDlg))
-                ShowWindow(hwndDlg, SW_RESTORE);
+            if (IsMinimized(WindowHandle))
+                ShowWindow(WindowHandle, SW_RESTORE);
             else
-                ShowWindow(hwndDlg, SW_SHOW);
+                ShowWindow(WindowHandle, SW_SHOW);
 
-            SetForegroundWindow(hwndDlg);
+            SetForegroundWindow(WindowHandle);
         }
         break;
     case PH_SHOWINSTALL:
@@ -624,12 +642,12 @@ LRESULT CALLBACK GeoLiteDialogSubclassProc(
         break;
     }
 
-    return CallWindowProc(oldWndProc, hwndDlg, uMsg, wParam, lParam);
+    return CallWindowProc(oldWndProc, WindowHandle, WindowMessage, wParam, lParam);
 }
 
 HRESULT CALLBACK GeoLiteDialogBootstrapCallback(
-    _In_ HWND hwndDlg,
-    _In_ UINT uMsg,
+    _In_ HWND WindowHandle,
+    _In_ UINT WindowMessage,
     _In_ WPARAM wParam,
     _In_ LPARAM lParam,
     _In_ LONG_PTR dwRefData
@@ -637,24 +655,22 @@ HRESULT CALLBACK GeoLiteDialogBootstrapCallback(
 {
     PNETWORK_GEODB_UPDATE_CONTEXT context = (PNETWORK_GEODB_UPDATE_CONTEXT)dwRefData;
 
-    switch (uMsg)
+    switch (WindowMessage)
     {
     case TDN_DIALOG_CONSTRUCTED:
         {
-            UpdateDialogHandle = context->DialogHandle = hwndDlg;
+            UpdateDialogHandle = context->DialogHandle = WindowHandle;
+            GeoLiteUpdateWindowDpi(context);
 
             // Center the update window on PH if it's visible else we center on the desktop.
-            PhCenterWindow(hwndDlg, context->ParentWindowHandle);
+            PhCenterWindow(WindowHandle, context->ParentWindowHandle);
 
-            // Create the Taskdialog icons
-            PhSetApplicationWindowIcon(hwndDlg);
-
-            PhRegisterWindowCallback(hwndDlg, PH_PLUGIN_WINDOW_EVENT_TYPE_TOPMOST, NULL);
+            PhRegisterWindowCallback(WindowHandle, PH_PLUGIN_WINDOW_EVENT_TYPE_TOPMOST, NULL);
 
             // Subclass the Taskdialog.
-            context->DefaultWindowProc = PhGetWindowProcedure(hwndDlg);
-            PhSetWindowContext(hwndDlg, UCHAR_MAX, context);
-            PhSetWindowProcedure(hwndDlg, GeoLiteDialogSubclassProc);
+            context->DefaultWindowProc = PhGetWindowProcedure(WindowHandle);
+            PhSetWindowContext(WindowHandle, UCHAR_MAX, context);
+            PhSetWindowProcedure(WindowHandle, GeoLiteDialogSubclassProc);
 
             ShowDbCheckForUpdatesDialog(context);
         }
@@ -704,7 +720,7 @@ NTSTATUS GeoLiteUpdateTaskDialogThread(
     //info.lpParameters = L"-plugin " PLUGIN_NAME L":UpdateGeoIp";
     //info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
     //info.nShow = SW_SHOWNORMAL;
-    //info.hwnd = Parameter;
+    //info.WindowHandle = Parameter;
     //info.lpVerb = L"runas";
     //
     //SystemInformer_PrepareForEarlyShutdown();
@@ -743,20 +759,20 @@ NTSTATUS GeoLiteUpdateTaskDialogThread(
 }
 
 HRESULT CALLBACK GeoLiteMissingKeyTaskDialogCallbackProc(
-    _In_ HWND hwndDlg,
-    _In_ UINT uMsg,
+    _In_ HWND WindowHandle,
+    _In_ UINT WindowMessage,
     _In_ WPARAM wParam,
     _In_ LPARAM lParam,
     _In_ LONG_PTR dwRefData
     )
 {
-    switch (uMsg)
+    switch (WindowMessage)
     {
     case TDN_HYPERLINK_CLICKED:
         {
             PWSTR hyperlink = (PWSTR)lParam;
 
-            PhShellExecute(hwndDlg, hyperlink, NULL);
+            PhShellExecute(WindowHandle, hyperlink, NULL);
         }
         break;
     }

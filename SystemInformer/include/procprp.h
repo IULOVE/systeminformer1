@@ -125,7 +125,7 @@ PHAPPAPI
 PPH_LAYOUT_ITEM
 NTAPI
 PhAddPropPageLayoutItem(
-    _In_ HWND hwnd,
+    _In_ HWND WindowHandle,
     _In_ HWND Handle,
     _In_ PPH_LAYOUT_ITEM ParentItem,
     _In_ ULONG Anchor
@@ -135,7 +135,7 @@ PHAPPAPI
 VOID
 NTAPI
 PhDoPropPageLayout(
-    _In_ HWND hwnd
+    _In_ HWND WindowHandle
     );
 
 FORCEINLINE
@@ -147,8 +147,14 @@ PhBeginPropPageLayout(
 {
     if (!PropPageContext->LayoutInitialized)
     {
-        return PhAddPropPageLayoutItem(hwndDlg, hwndDlg,
-            PH_PROP_PAGE_TAB_CONTROL_PARENT, PH_ANCHOR_ALL);
+        PhSetWindowStyle(hwndDlg, WS_CLIPCHILDREN | WS_CLIPSIBLINGS, WS_CLIPCHILDREN | WS_CLIPSIBLINGS);
+
+        return PhAddPropPageLayoutItem(
+            hwndDlg,
+            hwndDlg,
+            PH_PROP_PAGE_TAB_CONTROL_PARENT,
+            PH_ANCHOR_ALL | PH_LAYOUT_FORCE_INVALIDATE
+            );
     }
     else
     {

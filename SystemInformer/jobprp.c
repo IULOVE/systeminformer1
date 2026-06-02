@@ -18,6 +18,7 @@
 #include <hndlinfo.h>
 #include <secedit.h>
 #include <settings.h>
+#include <phsettings.h>
 
 #define MSG_UPDATE (WM_APP + 1)
 
@@ -30,8 +31,8 @@ typedef struct _JOB_PAGE_CONTEXT
     PH_CALLBACK_REGISTRATION ProcessesUpdatedRegistration;
 } JOB_PAGE_CONTEXT, *PJOB_PAGE_CONTEXT;
 
-LONG CALLBACK PhpJobPropPageProc(
-    _In_ HWND hwnd,
+UINT CALLBACK PhpJobPropPageProc(
+    _In_ HWND WindowHandle,
     _In_ UINT uMsg,
     _In_ LPPROPSHEETPAGE ppsp
     );
@@ -55,7 +56,7 @@ INT_PTR CALLBACK PhpJobStatisticsPageProc(
     _In_ LPARAM lParam
     );
 
-LONG CALLBACK PhpJobStatisticsSheetProc(
+INT CALLBACK PhpJobStatisticsSheetProc(
     _In_ HWND hwndDlg,
     _In_ UINT uMsg,
     _In_ LPARAM lParam
@@ -123,8 +124,8 @@ HPROPSHEETPAGE PhCreateJobPage(
     return propSheetPageHandle;
 }
 
-LONG CALLBACK PhpJobPropPageProc(
-    _In_ HWND hwnd,
+UINT CALLBACK PhpJobPropPageProc(
+    _In_ HWND WindowHandle,
     _In_ UINT uMsg,
     _In_ LPPROPSHEETPAGE ppsp
     )
@@ -237,7 +238,7 @@ INT_PTR CALLBACK PhpJobPageProc(
             PhAddListViewColumn(processesLv, 0, 0, 0, LVCFMT_LEFT, 240, L"Name");
             PhAddListViewColumn(limitsLv, 0, 0, 0, LVCFMT_LEFT, 120, L"Name");
             PhAddListViewColumn(limitsLv, 1, 1, 1, LVCFMT_LEFT, 160, L"Value");
-            PhLoadListViewColumnsFromSetting(L"JobListViewColumns", limitsLv);
+            PhLoadListViewColumnsFromSetting(SETTING_JOB_LIST_VIEW_COLUMNS, limitsLv);
 
             PhSetDialogItemText(hwndDlg, IDC_NAME, L"Unknown");
 
@@ -304,7 +305,7 @@ INT_PTR CALLBACK PhpJobPageProc(
 
                     if (flags & JOB_OBJECT_LIMIT_JOB_MEMORY)
                     {
-                        PPH_STRING value = PhaFormatSize(extendedLimits.JobMemoryLimit, -1);
+                        PPH_STRING value = PhaFormatSize(extendedLimits.JobMemoryLimit, ULONG_MAX);
                         PhpAddLimit(limitsLv, L"Job memory", value->Buffer);
                     }
 
@@ -333,7 +334,7 @@ INT_PTR CALLBACK PhpJobPageProc(
 
                     if (flags & JOB_OBJECT_LIMIT_PROCESS_MEMORY)
                     {
-                        PPH_STRING value = PhaFormatSize(extendedLimits.ProcessMemoryLimit, -1);
+                        PPH_STRING value = PhaFormatSize(extendedLimits.ProcessMemoryLimit, ULONG_MAX);
                         PhpAddLimit(limitsLv, L"Process memory", value->Buffer);
                     }
 
@@ -361,10 +362,10 @@ INT_PTR CALLBACK PhpJobPageProc(
                     {
                         PPH_STRING value;
 
-                        value = PhaFormatSize(extendedLimits.BasicLimitInformation.MinimumWorkingSetSize, -1);
+                        value = PhaFormatSize(extendedLimits.BasicLimitInformation.MinimumWorkingSetSize, ULONG_MAX);
                         PhpAddLimit(limitsLv, L"Working set minimum", value->Buffer);
 
-                        value = PhaFormatSize(extendedLimits.BasicLimitInformation.MaximumWorkingSetSize, -1);
+                        value = PhaFormatSize(extendedLimits.BasicLimitInformation.MaximumWorkingSetSize, ULONG_MAX);
                         PhpAddLimit(limitsLv, L"Working set maximum", value->Buffer);
                     }
                 }
@@ -398,7 +399,7 @@ INT_PTR CALLBACK PhpJobPageProc(
         }
         break;
     case WM_DESTROY:
-        PhSaveListViewColumnsToSetting(L"JobListViewColumns", GetDlgItem(hwndDlg, IDC_LIMITS));
+        PhSaveListViewColumnsToSetting(SETTING_JOB_LIST_VIEW_COLUMNS, GetDlgItem(hwndDlg, IDC_LIMITS));
         break;
     case WM_SHOWWINDOW:
         {
@@ -534,12 +535,9 @@ INT_PTR CALLBACK PhpJobPageProc(
                 if (point.x == -1 && point.y == -1)
                     PhGetListViewContextMenuPoint(listViewHandle, &point);
 
-                PhGetSelectedListViewItemParams(listViewHandle, &listviewItems, &numberOfItems);
-
-                if (numberOfItems != 0)
+                if (PhGetSelectedListViewItemParams(listViewHandle, &listviewItems, &numberOfItems))
                 {
                     menu = PhCreateEMenu();
-
                     PhInsertEMenuItem(menu, PhCreateEMenuItem(0, IDC_COPY, L"&Copy", NULL, NULL), ULONG_MAX);
                     PhInsertCopyListViewEMenuItem(menu, IDC_COPY, listViewHandle);
 
@@ -575,9 +573,9 @@ INT_PTR CALLBACK PhpJobPageProc(
                     }
 
                     PhDestroyEMenu(menu);
-                }
 
-                PhFree(listviewItems);
+                    PhFree(listviewItems);
+                }
             }
         }
         break;
@@ -773,7 +771,7 @@ INT_PTR CALLBACK PhpJobStatisticsPageProc(
     return FALSE;
 }
 
-LONG CALLBACK PhpJobStatisticsSheetProc(
+INT CALLBACK PhpJobStatisticsSheetProc(
     _In_ HWND hwndDlg,
     _In_ UINT uMsg,
     _In_ LPARAM lParam

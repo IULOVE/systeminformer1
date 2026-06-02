@@ -19,6 +19,7 @@
 #include <mapldr.h>
 #include <workqueue.h>
 #include <searchbox.h>
+#include <mapldr.h>
 
 #include "resource.h"
 
@@ -46,11 +47,6 @@ __has_include (<d3dkmthk.h>)
 
 #include <cfgmgr32.h>
 #include <tbs.h>
-
-// Undocumented device properties (Win10 only)
-DEFINE_DEVPROPKEY(DEVPKEY_Gpu_Luid, 0x60b193cb, 0x5276, 0x4d0f, 0x96, 0xfc, 0xf1, 0x73, 0xab, 0xad, 0x3e, 0xc6, 2); // DEVPROP_TYPE_UINT64
-DEFINE_DEVPROPKEY(DEVPKEY_Gpu_PhysicalAdapterIndex, 0x60b193cb, 0x5276, 0x4d0f, 0x96, 0xfc, 0xf1, 0x73, 0xab, 0xad, 0x3e, 0xc6, 3); // DEVPROP_TYPE_UINT32
-DEFINE_GUID(GUID_COMPUTE_DEVICE_ARRIVAL, 0x1024e4c9, 0x47c9, 0x48d3, 0xb4, 0xa8, 0xf9, 0xdf, 0x78, 0x52, 0x3b, 0x53);
 
 typedef D3DKMT_HANDLE* PD3DKMT_HANDLE;
 
@@ -95,7 +91,7 @@ extern BOOLEAN EtEnableScaleText;
 extern BOOLEAN EtPropagateCpuUsage;
 extern BOOLEAN EtEnableAvxSupport;
 
-#define PLUGIN_NAME L"ProcessHacker.ExtendedTools"
+#define PLUGIN_NAME L"ExtendedTools"
 #define SETTING_NAME_FIRST_RUN (PLUGIN_NAME L".FirstRun")
 #define SETTING_NAME_DISK_TREE_LIST_COLUMNS (PLUGIN_NAME L".DiskTreeListColumns")
 #define SETTING_NAME_DISK_TREE_LIST_SORT (PLUGIN_NAME L".DiskTreeListSort")
@@ -252,7 +248,13 @@ typedef struct _ET_DISK_ITEM
 #define ETDSTNC_IOPRIORITY 6
 #define ETDSTNC_RESPONSETIME 7
 #define ETDSTNC_ORIGINALNAME 8
-#define ETDSTNC_MAXIMUM 9
+#define ETDSTNC_READRATE 9
+#define ETDSTNC_WRITERATE 10
+#define ETDSTNC_TOTALRATE 11
+#define ETDSTNC_READBYTES 12
+#define ETDSTNC_WRITEBYTES 13
+#define ETDSTNC_TOTALBYTES 14
+#define ETDSTNC_MAXIMUM 15
 
 typedef struct _ET_DISK_NODE
 {
@@ -267,6 +269,12 @@ typedef struct _ET_DISK_NODE
     WCHAR ReadRateAverageText[PH_INT64_STR_LEN_1 + 5];
     WCHAR WriteRateAverageText[PH_INT64_STR_LEN_1 + 5];
     WCHAR TotalRateAverageText[PH_INT64_STR_LEN_1 + 5];
+    WCHAR ReadRateText[PH_INT64_STR_LEN_1 + 5];
+    WCHAR WriteRateText[PH_INT64_STR_LEN_1 + 5];
+    WCHAR TotalRateText[PH_INT64_STR_LEN_1 + 5];
+    WCHAR ReadBytesText[PH_INT64_STR_LEN_1 + 5];
+    WCHAR WriteBytesText[PH_INT64_STR_LEN_1 + 5];
+    WCHAR TotalBytesText[PH_INT64_STR_LEN_1 + 5];
     WCHAR ResponseTimeText[PH_INT64_STR_LEN_1 + 5];
 } ET_DISK_NODE, *PET_DISK_NODE;
 
@@ -308,7 +316,11 @@ typedef struct _ET_DISK_NODE
 #define ETPRTNC_NPU 34
 #define ETPRTNC_NPUDEDICATEDBYTES 35
 #define ETPRTNC_NPUSHAREDBYTES 36
-#define ETPRTNC_MAXIMUM 36
+#define ETPRTNC_FIREWALLALLOWS 37
+#define ETPRTNC_FIREWALLBLOCKS 38
+#define ETPRTNC_FIREWALLALLOWSDELTA 39
+#define ETPRTNC_FIREWALLBLOCKSDELTA 40
+#define ETPRTNC_MAXIMUM 40
 
 // Network list columns
 
@@ -372,6 +384,8 @@ typedef enum _ET_PROCESS_STATISTICS_INDEX
     ET_PROCESS_STATISTICS_INDEX_MAX
 } ET_PROCESS_STATISTICS_INDEX;
 
+#define ET_PROCESS_STATISTICS_PARAM(Index) ((ULONG)(0x40000000ul | (ULONG)(Index)))
+
 // Firewall status
 
 typedef enum _ET_FIREWALL_STATUS
@@ -392,7 +406,8 @@ typedef struct _ET_PROCESS_BLOCK
     PPH_PROCESS_ITEM ProcessItem;
     PPH_PROCESS_NODE ProcessNode;
 
-    BOOLEAN HaveFirstSample;
+    BOOLEAN HaveDiskSample;
+    BOOLEAN HaveNetworkSample;
 
     // Disk/Network
 
@@ -427,6 +442,26 @@ typedef struct _ET_PROCESS_BLOCK
     PH_UINT64_DELTA NetworkSendDelta;
     PH_UINT64_DELTA NetworkSendRawDelta;
 
+    ULONG64 DiskReadCountMin; ULONG64 DiskReadCountMax; ULONG64 DiskReadCountDiff;
+    ULONG64 DiskReadRawMin; ULONG64 DiskReadRawMax; ULONG64 DiskReadRawDiff;
+    ULONG64 DiskReadRawDeltaMin; ULONG64 DiskReadRawDeltaMax; ULONG64 DiskReadRawDeltaDiff;
+    ULONG64 DiskWriteCountMin; ULONG64 DiskWriteCountMax; ULONG64 DiskWriteCountDiff;
+    ULONG64 DiskWriteRawMin; ULONG64 DiskWriteRawMax; ULONG64 DiskWriteRawDiff;
+    ULONG64 DiskWriteRawDeltaMin; ULONG64 DiskWriteRawDeltaMax; ULONG64 DiskWriteRawDeltaDiff;
+    ULONG64 DiskTotalCountMin; ULONG64 DiskTotalCountMax; ULONG64 DiskTotalCountDiff;
+    ULONG64 DiskTotalRawMin; ULONG64 DiskTotalRawMax; ULONG64 DiskTotalRawDiff;
+    ULONG64 DiskTotalRawDeltaMin; ULONG64 DiskTotalRawDeltaMax; ULONG64 DiskTotalRawDeltaDiff;
+
+    ULONG64 NetworkReceiveCountMin; ULONG64 NetworkReceiveCountMax; ULONG64 NetworkReceiveCountDiff;
+    ULONG64 NetworkReceiveRawMin; ULONG64 NetworkReceiveRawMax; ULONG64 NetworkReceiveRawDiff;
+    ULONG64 NetworkReceiveRawDeltaMin; ULONG64 NetworkReceiveRawDeltaMax; ULONG64 NetworkReceiveRawDeltaDiff;
+    ULONG64 NetworkSendCountMin; ULONG64 NetworkSendCountMax; ULONG64 NetworkSendCountDiff;
+    ULONG64 NetworkSendRawMin; ULONG64 NetworkSendRawMax; ULONG64 NetworkSendRawDiff;
+    ULONG64 NetworkSendRawDeltaMin; ULONG64 NetworkSendRawDeltaMax; ULONG64 NetworkSendRawDeltaDiff;
+    ULONG64 NetworkTotalCountMin; ULONG64 NetworkTotalCountMax; ULONG64 NetworkTotalCountDiff;
+    ULONG64 NetworkTotalRawMin; ULONG64 NetworkTotalRawMax; ULONG64 NetworkTotalRawDiff;
+    ULONG64 NetworkTotalRawDeltaMin; ULONG64 NetworkTotalRawDeltaMax; ULONG64 NetworkTotalRawDeltaDiff;
+
     // GPU
 
     PH_UINT64_DELTA GpuRunningTimeDelta;
@@ -446,6 +481,10 @@ typedef struct _ET_PROCESS_BLOCK
     ULONG64 GpuDedicatedUsage;
     ULONG64 GpuSharedUsage;
     ULONG64 GpuCommitUsage;
+    ULONG64 GpuDedicatedUsageMin; ULONG64 GpuDedicatedUsageMax; ULONG64 GpuDedicatedUsageDiff;
+    ULONG64 GpuSharedUsageMin; ULONG64 GpuSharedUsageMax; ULONG64 GpuSharedUsageDiff;
+    ULONG64 GpuCommitUsageMin; ULONG64 GpuCommitUsageMax; ULONG64 GpuCommitUsageDiff;
+    ULONG64 GpuTotalUsageMin; ULONG64 GpuTotalUsageMax; ULONG64 GpuTotalUsageDiff;
 
     // NPU
 
@@ -486,6 +525,15 @@ typedef struct _ET_PROCESS_BLOCK
     PH_CIRCULAR_BUFFER_FLOAT FramesMsUntilDisplayedHistory;
     PH_CIRCULAR_BUFFER_FLOAT FramesDisplayLatencyHistory;
 
+    // Firewall
+
+    ULONG64 FirewallAllowCount;
+    ULONG64 FirewallBlockCount;
+    PH_UINT64_DELTA FirewallAllowDelta;
+    PH_UINT64_DELTA FirewallBlockDelta;
+    PH_CIRCULAR_BUFFER_ULONG64 FirewallAllowHistory;
+    PH_CIRCULAR_BUFFER_ULONG64 FirewallBlockHistory;
+
     ULONG ListViewGroupCache[ET_PROCESS_STATISTICS_CATEGORY_MAX + 1];
     ULONG ListViewRowCache[ET_PROCESS_STATISTICS_INDEX_MAX + 1];
 
@@ -499,6 +547,7 @@ typedef struct _ET_NETWORK_BLOCK
 {
     LIST_ENTRY ListEntry;
     PPH_NETWORK_ITEM NetworkItem;
+    BOOLEAN HaveFirstSample;
 
     ULONG64 ReceiveCount;
     ULONG64 SendCount;
@@ -518,7 +567,17 @@ typedef struct _ET_NETWORK_BLOCK
     };
 
     ET_FIREWALL_STATUS FirewallStatus;
-    BOOLEAN FirewallStatusValid;
+
+    union
+    {
+        BOOLEAN Flags;
+        struct
+        {
+            BOOLEAN FirewallStatusValid : 1;
+            BOOLEAN IsWow64Process : 1;
+            BOOLEAN Spare : 6;
+        };
+    };
 
     PH_QUEUED_LOCK TextCacheLock;
     SIZE_T TextCacheLength[ETNETNC_MAXIMUM + 1];
@@ -595,6 +654,20 @@ NTSTATUS EtQueryAdapterInformation(
     _In_ KMTQUERYADAPTERINFOTYPE InformationClass,
     _Out_writes_bytes_opt_(InformationLength) PVOID Information,
     _In_ UINT32 InformationLength
+    );
+
+NTSTATUS EtAdapterEnumProcessList(
+    _In_ LUID AdapterLuid,
+    _In_ SIZE_T PreviousProcessCount,
+    _Outptr_result_buffer_(*ProcessCount) PULONG* ProcessIds,
+    _Out_ PSIZE_T ProcessCount
+    );
+
+NTSTATUS EtAdapterGetProcessList(
+    _In_ LUID AdapterLuid,
+    _In_ SIZE_T PreviousProcessCount,
+    _Outptr_result_buffer_(*ProcessCount) PHANDLE* ProcessHandles,
+    _Out_ PSIZE_T ProcessCount
     );
 
 // HardwareDevices!_GX_ATTRIBUTES
@@ -743,29 +816,34 @@ typedef struct _ETP_GPU_ADAPTER
     PPH_STRING Description;
     PPH_LIST NodeNameList;
 
+    D3DKMT_HANDLE CachedAdapterHandle;  // 0 = invalid, non-zero = valid
+    SIZE_T ProcessIdCount;
+    SIZE_T ProcessHandleCount;
+
     RTL_BITMAP ApertureBitMap;
     ULONG ApertureBitMapBuffer[1];
 } ETP_GPU_ADAPTER, *PETP_GPU_ADAPTER;
 
-extern BOOLEAN EtGpuEnabled;
-extern BOOLEAN EtGpuSupported;
-extern BOOLEAN EtGpuD3DEnabled;
+EXTERN_C BOOLEAN EtGpuEnabled;
+EXTERN_C BOOLEAN EtGpuSupported;
+EXTERN_C BOOLEAN EtGpuD3DEnabled;
+EXTERN_C BOOLEAN EtGpuD3DEnumProcesses;
 EXTERN_C BOOLEAN EtFramesEnabled;
-extern PPH_LIST EtpGpuAdapterList;
+EXTERN_C PPH_LIST EtpGpuAdapterList;
 
 extern ULONG EtGpuTotalNodeCount;
 extern ULONG EtGpuTotalSegmentCount;
 extern ULONG64 EtGpuDedicatedLimit;
 extern ULONG64 EtGpuSharedLimit;
 
-extern PH_UINT64_DELTA EtGpuClockTotalRunningTimeDelta;
-extern LARGE_INTEGER EtGpuClockTotalRunningTimeFrequency;
 extern FLOAT EtGpuNodeUsage;
 extern PH_CIRCULAR_BUFFER_FLOAT EtGpuNodeHistory;
 extern PH_CIRCULAR_BUFFER_ULONG EtMaxGpuNodeHistory; // ID of max. GPU usage process
 extern PH_CIRCULAR_BUFFER_FLOAT EtMaxGpuNodeUsageHistory;
 
 extern PPH_UINT64_DELTA EtGpuNodesTotalRunningTimeDelta;
+extern PPH_UINT64_DELTA EtGpuNodesSystemRunningTimeDelta;
+extern ULONG64 EtGpuSystemRunningTimeDelta;
 extern PPH_CIRCULAR_BUFFER_FLOAT EtGpuNodesHistory;
 
 extern ULONG64 EtGpuDedicatedUsage;
@@ -781,6 +859,27 @@ extern PH_CIRCULAR_BUFFER_ULONG64 EtGpuSharedHistory;
 extern PH_CIRCULAR_BUFFER_FLOAT EtGpuPowerUsageHistory;
 extern PH_CIRCULAR_BUFFER_FLOAT EtGpuTemperatureHistory;
 extern PH_CIRCULAR_BUFFER_ULONG64 EtGpuFanRpmHistory;
+
+// Lazy-allocation helpers for per-process circular history buffers.
+// The buffer's Data is NULL until the first sample is added; processes
+// that never produce a sample never allocate the backing storage.
+#define ET_CIRCULAR_BUFFER_ADD_ULONG64(CircularBuffer, Value) \
+do { \
+    if (!(CircularBuffer)->Data) PhInitializeCircularBuffer_ULONG64((CircularBuffer), EtSampleCount); \
+    PhAddItemCircularBuffer_ULONG64((CircularBuffer), (Value)); \
+} while (0)
+
+#define ET_CIRCULAR_BUFFER_ADD_ULONG(CircularBuffer, Value) \
+do { \
+    if (!(CircularBuffer)->Data) PhInitializeCircularBuffer_ULONG((CircularBuffer), EtSampleCount); \
+    PhAddItemCircularBuffer_ULONG((CircularBuffer), (Value)); \
+} while (0)
+
+#define ET_CIRCULAR_BUFFER_ADD_FLOAT(CircularBuffer, Value) \
+do { \
+    if (!(CircularBuffer)->Data) PhInitializeCircularBuffer_FLOAT((CircularBuffer), EtSampleCount); \
+    PhAddItemCircularBuffer_FLOAT((CircularBuffer), (Value)); \
+} while (0)
 
 VOID EtGpuMonitorInitialization(
     VOID
@@ -890,14 +989,14 @@ extern ULONG EtNpuTotalSegmentCount;
 extern ULONG64 EtNpuDedicatedLimit;
 extern ULONG64 EtNpuSharedLimit;
 
-extern PH_UINT64_DELTA EtNpuClockTotalRunningTimeDelta;
-extern LARGE_INTEGER EtNpuClockTotalRunningTimeFrequency;
 extern FLOAT EtNpuNodeUsage;
 extern PH_CIRCULAR_BUFFER_FLOAT EtNpuNodeHistory;
 extern PH_CIRCULAR_BUFFER_ULONG EtMaxNpuNodeHistory; // ID of max. GPU usage process
 extern PH_CIRCULAR_BUFFER_FLOAT EtMaxNpuNodeUsageHistory;
 
 extern PPH_UINT64_DELTA EtNpuNodesTotalRunningTimeDelta;
+extern PPH_UINT64_DELTA EtNpuNodesSystemRunningTimeDelta;
+extern ULONG64 EtNpuSystemRunningTimeDelta;
 extern PPH_CIRCULAR_BUFFER_FLOAT EtNpuNodesHistory;
 
 extern ULONG64 EtNpuDedicatedUsage;
@@ -917,6 +1016,26 @@ extern PH_CIRCULAR_BUFFER_ULONG64 EtNpuFanRpmHistory;
 VOID EtNpuMonitorInitialization(
     VOID
     );
+
+PPH_STRING EtGetDeviceInterfaceFromLuid(
+    _In_ PLUID AdapterLuid
+    );
+
+PPH_LIST EtInitializeGraphicsAdapters(
+    VOID
+    );
+
+VOID EtUninitializeGraphicsAdapters(
+    _In_ PPH_LIST AdapterList
+    );
+
+typedef struct _ET_DISCOVERED_ADAPTER
+{
+    D3DKMT_HANDLE AdapterHandle;
+    LUID AdapterLuid;
+    PPH_STRING DeviceInterface;
+    ET_ADAPTER_ATTRIBUTES Attributes;
+} ET_DISCOVERED_ADAPTER, *PET_DISCOVERED_ADAPTER;
 
 typedef struct _ET_PROCESS_NPU_STATISTICS
 {
@@ -1186,18 +1305,25 @@ extern ULONG EtFwFlagsMask;
 extern ULONG EtFwStatus;
 extern ULONG FwRunCount;
 extern HANDLE EtFwEngineHandle;
+extern HANDLE EtFwEngineEnumHandle;
 extern PH_CALLBACK FwItemAddedEvent;
 extern PH_CALLBACK FwItemModifiedEvent;
 extern PH_CALLBACK FwItemRemovedEvent;
 extern PH_CALLBACK FwItemsUpdatedEvent;
+extern PH_CALLBACK EtFwItemAddedEvent;
+extern PH_CALLBACK EtFwItemModifiedEvent;
+extern PH_CALLBACK EtFwItemRemovedEvent;
+extern PH_CALLBACK EtFwItemsUpdatedEvent;
 
 typedef enum _FW_COLUMN_TYPE
 {
     FW_COLUMN_NAME,
+    FW_COLUMN_PROCESSID,
     FW_COLUMN_ACTION,
     FW_COLUMN_DIRECTION,
     FW_COLUMN_RULENAME,
     FW_COLUMN_RULEDESCRIPTION,
+    FW_COLUMN_FILTER_ORIGIN,
     FW_COLUMN_LOCALADDRESS,
     FW_COLUMN_LOCALPORT,
     FW_COLUMN_LOCALHOSTNAME,
@@ -1206,7 +1332,6 @@ typedef enum _FW_COLUMN_TYPE
     FW_COLUMN_REMOTEHOSTNAME,
     FW_COLUMN_PROTOCOL,
     FW_COLUMN_TIMESTAMP,
-    FW_COLUMN_PROCESSFILENAME,
     FW_COLUMN_USER,
     FW_COLUMN_PACKAGE,
     FW_COLUMN_COUNTRY,
@@ -1217,6 +1342,11 @@ typedef enum _FW_COLUMN_TYPE
     FW_COLUMN_ORIGINALNAME,
     FW_COLUMN_LOCALSERVICENAME,
     FW_COLUMN_REMOTESERVICENAME,
+    FW_COLUMN_INTERFACE_LUID,
+    FW_COLUMN_COMPARTMENT_ID,
+    FW_COLUMN_POLICY_APP_ID,
+    FW_COLUMN_SERVICE_SIDS,
+    FW_COLUMN_FQBN_NAME,
     FW_COLUMN_MAXIMUM
 } FW_COLUMN_TYPE;
 
@@ -1233,6 +1363,7 @@ typedef enum _FW_EVENT_DIRECTION
 typedef struct _FW_EVENT_ITEM
 {
     PH_TREENEW_NODE Node;
+    PH_SH_STATE ShState;
 
     LIST_ENTRY AgeListEntry;
     ULONG RunId;
@@ -1253,7 +1384,8 @@ typedef struct _FW_EVENT_ITEM
             ULONG LocalPortResolved : 1;
             ULONG RemoteAddressResolved : 1;
             ULONG RemotePortResolved : 1;
-            ULONG Spare : 23;
+            ULONG ServiceSidsResolved : 1;
+            ULONG Spare : 22;
         };
     };
 
@@ -1263,6 +1395,9 @@ typedef struct _FW_EVENT_ITEM
     ULONG Type; // FWPM_NET_EVENT_TYPE
     ULONG IpProtocol;
     ULONG ScopeId;
+
+    ULONG64 FilterId;
+    ULONG LayerId;
     PH_IP_ENDPOINT LocalEndpoint;
     PH_IP_ENDPOINT RemoteEndpoint;
 
@@ -1274,6 +1409,11 @@ typedef struct _FW_EVENT_ITEM
     PPH_PROCESS_ITEM ProcessItem;
     ULONG_PTR ProcessIconIndex;
     BOOLEAN ProcessIconValid;
+
+    ULONG ProcessId;
+
+    NET_LUID InterfaceLuid;
+    NET_IF_COMPARTMENT_ID CompartmentId;
 
     PPH_STRING ProcessFileName;
     PPH_STRING ProcessFileNameWin32;
@@ -1302,6 +1442,15 @@ typedef struct _FW_EVENT_ITEM
 
     PPH_STRINGREF LocalPortServiceName;
     PPH_STRINGREF RemotePortServiceName;
+
+    PPH_STRING FilterOrigin;
+    PPH_STRING PolicyAppId;
+    PPH_STRING ServiceSids;
+    PPH_STRING FqbnName;
+
+    PPH_STRING InterfaceLuidString;
+    PPH_STRING CompartmentIdString;
+    PPH_STRING ProcessIdString;
 
     PH_STRINGREF TextCache[FW_COLUMN_MAXIMUM];
 } FW_EVENT_ITEM, *PFW_EVENT_ITEM;
@@ -1361,7 +1510,7 @@ PPH_STRING EtFwGetSidFullNameCachedSlow(
 VOID EtFwDrawCountryIcon(
     _In_ HDC hdc,
     _In_ RECT rect,
-    _In_ INT Index
+    _In_ LONG Index
     );
 
 VOID EtFwShowPingWindow(
@@ -1475,11 +1624,12 @@ typedef enum _FW_PROVIDER_FLAG
 } FW_PROVIDER_FLAG;
 
 VOID InitializeFwTreeList(
-    _In_ HWND hwnd
+    _In_ HWND WindowHandle
     );
 
 PFW_EVENT_ITEM AddFwNode(
-    _In_ PFW_EVENT_ITEM FwItem
+    _In_ PFW_EVENT_ITEM FwItem,
+    _In_ ULONG RunId
     );
 
 VOID RemoveFwNode(
@@ -1491,7 +1641,7 @@ VOID UpdateFwNode(
     );
 
 BOOLEAN NTAPI FwTreeNewCallback(
-    _In_ HWND hwnd,
+    _In_ HWND WindowHandle,
     _In_ PH_TREENEW_MESSAGE Message,
     _In_ PVOID Parameter1,
     _In_ PVOID Parameter2,
@@ -1639,6 +1789,7 @@ typedef struct _UEFI_WINDOW_CONTEXT
     HWND ListViewHandle;
     HWND ParentWindowHandle;
     PH_LAYOUT_MANAGER LayoutManager;
+    HFONT WindowFont;
 } UEFI_WINDOW_CONTEXT, *PUEFI_WINDOW_CONTEXT;
 
 typedef struct _EFI_ENTRY

@@ -46,8 +46,8 @@
 #include <phplug.h>
 #include <phsettings.h>
 
-static HANDLE PhSipThread = NULL;
 HWND PhSipWindow = NULL;
+static HANDLE PhSipThread = NULL;
 static PPH_LIST PhSipDialogList = NULL;
 static PH_EVENT InitializedEvent = PH_EVENT_INIT;
 static PCWSTR InitialSectionName;
@@ -67,6 +67,15 @@ static BOOLEAN RestoreSummaryControlHot;
 static BOOLEAN RestoreSummaryControlHasFocus;
 static HTHEME ThemeData;
 static BOOLEAN ThemeHasItemBackground;
+#if defined(SYSINFO_SCROLL_ANCHOR)
+static ULONG SummaryScrollEnabled;
+static LONG SummaryScrollOffset;
+static LONG SummaryScrollMax;
+static LONG SummaryScrollPage;
+static LONG SummaryContentHeight;
+static LONG SummaryGraphHeight;
+static LONG SummaryGraphSpacing;
+#endif
 
 VOID PhShowSystemInformationDialog(
     _In_opt_ PCWSTR SectionName
@@ -115,7 +124,7 @@ NTSTATUS PhSipSysInfoThreadStart(
 
     while (result = GetMessage(&message, NULL, 0, 0))
     {
-        if (result == -1)
+        if (result == INT_ERROR)
             break;
 
         processed = FALSE;
@@ -171,6 +180,7 @@ NTSTATUS PhSipSysInfoThreadStart(
     return STATUS_SUCCESS;
 }
 
+_Function_class_(DLGPROC)
 INT_PTR CALLBACK PhSipSysInfoDialogProc(
     _In_ HWND hwndDlg,
     _In_ UINT uMsg,
@@ -205,6 +215,28 @@ INT_PTR CALLBACK PhSipSysInfoDialogProc(
     case WM_SIZE:
         {
             PhSipOnSize(hwndDlg, (UINT)wParam, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        }
+        break;
+    case WM_VSCROLL:
+        {
+#if defined(SYSINFO_SCROLL_ANCHOR)
+            if (PhSipSummaryScrollEnabled())
+            {
+                PhSipHandleSummaryVScroll(wParam);
+                return 0;
+            }
+#endif
+        }
+        break;
+    case WM_MOUSEWHEEL:
+        {
+#if defined(SYSINFO_SCROLL_ANCHOR)
+            if (PhSipSummaryScrollEnabled())
+            {
+                PhSipHandleSummaryMouseWheel(wParam);
+                return 0;
+            }
+#endif
         }
         break;
     case WM_SIZING:
@@ -271,6 +303,7 @@ INT_PTR CALLBACK PhSipSysInfoDialogProc(
     case WM_DPICHANGED:
         {
             PhSipInitializeParameters();
+            PhSipUpdateThemeData();
 
             if (SectionList)
             {
@@ -280,7 +313,7 @@ INT_PTR CALLBACK PhSipSysInfoDialogProc(
 
                     if (section->DialogHandle)
                     {
-                        section->Callback(section, SysInfoDpiChanged, UlongToPtr(LOWORD(wParam)), 0);
+                        section->Callback(section, SysInfoDpiChanged, UlongToPtr(LOWORD(wParam)), NULL);
                     }
                 }
             }
@@ -298,6 +331,7 @@ INT_PTR CALLBACK PhSipSysInfoDialogProc(
     return FALSE;
 }
 
+_Function_class_(DLGPROC)
 INT_PTR CALLBACK PhSipContainerDialogProc(
     _In_ HWND WindowHandle,
     _In_ UINT WindowMessage,
@@ -318,6 +352,8 @@ INT_PTR CALLBACK PhSipContainerDialogProc(
             //    // slower drawing and should be considered a temporary workaround. (dmex)
             //    PhSetWindowExStyle(hwndDlg, WS_EX_COMPOSITED, WS_EX_COMPOSITED);
             //}
+
+            PhSetWindowStyle(WindowHandle, WS_CLIPCHILDREN, WS_CLIPCHILDREN);
         }
         break;
     case WM_CTLCOLORBTN:
@@ -365,6 +401,7 @@ VOID PhSipOnInitDialog(
     PhSetApplicationWindowIcon(PhSipWindow);
 
     PhSetControlTheme(PhSipWindow, L"explorer");
+    PhSetWindowStyle(PhSipWindow, WS_CLIPCHILDREN, WS_CLIPCHILDREN);
 
     PhRegisterCallback(
         PhGetGeneralCallback(GeneralCallbackProcessProviderUpdatedEvent),
@@ -437,6 +474,8 @@ VOID PhSipOnInitDialog(
         NULL
         );
 
+    SummaryScrollEnabled = PhGetIntegerSetting(SETTING_SYSINFO_WINDOW_SCROLL_ENABLED);
+
     RestoreSummaryControlOldWndProc = PhGetWindowProcedure(RestoreSummaryControl);
     PhSetWindowProcedure(RestoreSummaryControl, PhSipPanelHookWndProc);
     RestoreSummaryControlHot = FALSE;
@@ -470,7 +509,10 @@ VOID PhSipOnInitDialog(
         //    MinimumSize.bottom = newMinimumHeight;
     }
 
-    PhLoadWindowPlacementFromSetting(SETTING_SYSINFO_WINDOW_POSITION, SETTING_SYSINFO_WINDOW_SIZE, PhSipWindow);
+    if (PhValidWindowPlacementFromSetting(SETTING_SYSINFO_WINDOW_POSITION))
+        PhLoadWindowPlacementFromSetting(SETTING_SYSINFO_WINDOW_POSITION, SETTING_SYSINFO_WINDOW_SIZE, PhSipWindow);
+    else
+        PhCenterWindow(PhSipWindow, NULL);
 
     if (PhGetIntegerSetting(SETTING_SYSINFO_WINDOW_STATE) == SW_MAXIMIZE)
         ShowWindow(PhSipWindow, SW_MAXIMIZE);
@@ -619,9 +661,9 @@ VOID PhSipOnCommand(
     case IDC_MAXSCREEN:
         {
             static WINDOWPLACEMENT windowLayout = { sizeof(WINDOWPLACEMENT) };
-            LONG_PTR windowStyle = PhGetWindowStyle(PhSipWindow);
+            ULONG windowStyle = PhGetWindowStyle(PhSipWindow);
 
-            if (windowStyle & WS_OVERLAPPEDWINDOW)
+            if (FlagOn(windowStyle, WS_OVERLAPPEDWINDOW))
             {
                 MONITORINFO info = { sizeof(MONITORINFO) };
 
@@ -790,7 +832,7 @@ BOOLEAN PhSipOnNotify(
 
                 if (getDrawInfo->Header.hwndFrom == section->GraphHandle)
                 {
-                    section->Callback(section, SysInfoGraphGetDrawInfo, drawInfo, 0);
+                    section->Callback(section, SysInfoGraphGetDrawInfo, drawInfo, NULL);
 
                     if (CurrentView == SysInfoSectionView)
                     {
@@ -832,7 +874,7 @@ BOOLEAN PhSipOnNotify(
                         graphGetTooltipText.Index = getTooltipText->Index;
                         PhInitializeEmptyStringRef(&graphGetTooltipText.Text);
 
-                        section->Callback(section, SysInfoGraphGetTooltipText, &graphGetTooltipText, 0);
+                        section->Callback(section, SysInfoGraphGetTooltipText, &graphGetTooltipText, NULL);
 
                         getTooltipText->Text = graphGetTooltipText.Text;
 
@@ -998,7 +1040,7 @@ VOID PhSipOnUserMessage(
                 }
             }
 
-            InvalidateRect(PhSipWindow, NULL, TRUE);
+            PhSipOnSize(PhSipWindow, 0, 0, 0);
         }
         break;
     }
@@ -1011,6 +1053,47 @@ VOID PhSiNotifyChangeSettings(
     PhSipUpdateColorParameters();
 }
 
+static HFONT PhSipCreateGraphLabelFont(
+    _In_ LONG WindowDpi
+    )
+{
+    LOGFONT logFont;
+    HFONT fontHandle;
+
+    if (PhGetSystemParametersInfo(SPI_GETICONTITLELOGFONT, sizeof(LOGFONT), &logFont, WindowDpi))
+    {
+        logFont.lfHeight += PhMultiplyDivideSigned(1, WindowDpi, 72);
+        fontHandle = CreateFontIndirect(&logFont);
+        if (fontHandle) return fontHandle;
+    }
+
+    return PhCreateApplicationFont(WindowDpi);
+}
+
+static VOID PhSipDeleteGraphFonts(
+    _Inout_ PPH_GRAPH_DRAW_INFO DrawInfo
+    )
+{
+    HFONT textFont = DrawInfo->CachedTextFont;
+    HFONT labelYFont = DrawInfo->CachedLabelYFont;
+
+    if (DrawInfo->CachedTextFont)
+    {
+        DeleteFont(textFont);
+        DrawInfo->CachedTextFont = NULL;
+    }
+
+    if (DrawInfo->CachedLabelYFont)
+    {
+        if (labelYFont != textFont)
+            DeleteFont(labelYFont);
+
+        DrawInfo->CachedLabelYFont = NULL;
+    }
+
+    DrawInfo->CachedFontDpi = 0;
+}
+
 _Function_class_(PH_SYSINFO_COLOR_SETUP_FUNCTION)
 VOID PhSiSetColorsGraphDrawInfo(
     _Out_ PPH_GRAPH_DRAW_INFO DrawInfo,
@@ -1019,41 +1102,31 @@ VOID PhSiSetColorsGraphDrawInfo(
     _In_ LONG WindowDpi
     )
 {
-    static PH_QUEUED_LOCK lock = PH_QUEUED_LOCK_INIT;
-    static LONG lastDpi = ULONG_MAX;
-    static HFONT iconTitleFont = NULL;
-
-    // Get the appropriate fonts.
-
-    if (DrawInfo->Flags & PH_GRAPH_LABEL_MAX_Y)
+    if (DrawInfo->CachedFontDpi != WindowDpi || !DrawInfo->CachedTextFont || !DrawInfo->CachedLabelYFont)
     {
-        PhAcquireQueuedLockExclusive(&lock);
+        PhSipDeleteGraphFonts(DrawInfo);
 
-        if (lastDpi != WindowDpi)
+        if (!DrawInfo->CachedTextFont)
         {
-            LOGFONT logFont;
-
-            if (PhGetSystemParametersInfo(SPI_GETICONTITLELOGFONT, sizeof(LOGFONT), &logFont, WindowDpi))
-            {
-                logFont.lfHeight += PhMultiplyDivide(1, WindowDpi, 72);
-
-                HFONT fontHandle = iconTitleFont;
-                iconTitleFont = CreateFontIndirect(&logFont);
-                if (fontHandle) DeleteFont(fontHandle);
-            }
-
-            if (!iconTitleFont)
-                iconTitleFont = PhApplicationFont;
-
-            lastDpi = WindowDpi;
+            DrawInfo->CachedTextFont = PhSipCreateGraphLabelFont(WindowDpi);
         }
 
-        DrawInfo->LabelYFont = iconTitleFont;
+        if (!DrawInfo->CachedLabelYFont)
+        {
+            DrawInfo->CachedLabelYFont = DrawInfo->CachedTextFont;
+        }
 
-        PhReleaseQueuedLockExclusive(&lock);
+        DrawInfo->CachedFontDpi = WindowDpi;
     }
 
-    DrawInfo->TextFont = PhApplicationFont;
+    // Cache per-graph fonts so one window's DPI does not replace another's handles.
+
+    if (FlagOn(DrawInfo->Flags, PH_GRAPH_LABEL_MAX_Y))
+        DrawInfo->LabelYFont = DrawInfo->CachedLabelYFont;
+    else
+        DrawInfo->LabelYFont = NULL;
+
+    DrawInfo->TextFont = DrawInfo->CachedTextFont;
 
     // Set up the colors.
 
@@ -1148,7 +1221,7 @@ PPH_STRING PhSiUInt64LabelYFunction(
     _In_ FLOAT Parameter
     )
 {
-    ULONG64 value = (ULONG64)Value * (ULONG64)Parameter;
+    ULONG64 value = (ULONG64)(Value * Parameter);
 
     if (value != 0)
     {
@@ -1192,6 +1265,7 @@ VOID PhSipInitializeParameters(
     PhSipDeleteParameters();
 
     memset(&CurrentParameters, 0, sizeof(PH_SYSINFO_PARAMETERS));
+    memset(&logFont, 0, sizeof(LOGFONT));
 
     CurrentParameters.WindowDpi = PhGetWindowDpi(PhSipWindow);
     CurrentParameters.SysInfoWindowHandle = PhSipWindow;
@@ -1203,16 +1277,18 @@ VOID PhSipInitializeParameters(
     }
     else
     {
-        CurrentParameters.Font = PhApplicationFont;
-        GetObject(PhApplicationFont, sizeof(LOGFONT), &logFont);
+        CurrentParameters.Font = PhCreateApplicationFont(CurrentParameters.WindowDpi);
     }
 
     hdc = GetDC(PhSipWindow);
 
-    logFont.lfHeight -= PhMultiplyDivide(3, CurrentParameters.WindowDpi, 72);
+    if (CurrentParameters.Font)
+        GetObject(CurrentParameters.Font, sizeof(LOGFONT), &logFont);
+
+    logFont.lfHeight -= PhMultiplyDivideSigned(3, CurrentParameters.WindowDpi, 72);
     CurrentParameters.MediumFont = CreateFontIndirect(&logFont);
 
-    logFont.lfHeight -= PhMultiplyDivide(3, CurrentParameters.WindowDpi, 72);
+    logFont.lfHeight -= PhMultiplyDivideSigned(3, CurrentParameters.WindowDpi, 72);
     CurrentParameters.LargeFont = CreateFontIndirect(&logFont);
 
     PhSipUpdateColorParameters();
@@ -1232,19 +1308,23 @@ VOID PhSipInitializeParameters(
     SelectFont(hdc, originalFont);
 
     // Internal padding and other values
-    CurrentParameters.PanelPadding = PhGetDpi(PH_SYSINFO_PANEL_PADDING, CurrentParameters.WindowDpi);
-    CurrentParameters.WindowPadding = PhGetDpi(PH_SYSINFO_WINDOW_PADDING, CurrentParameters.WindowDpi);
-    CurrentParameters.GraphPadding = PhGetDpi(PH_SYSINFO_GRAPH_PADDING, CurrentParameters.WindowDpi);
-    CurrentParameters.SmallGraphWidth = PhGetDpi(PH_SYSINFO_SMALL_GRAPH_WIDTH, CurrentParameters.WindowDpi);
-    CurrentParameters.SmallGraphPadding = PhGetDpi(PH_SYSINFO_SMALL_GRAPH_PADDING, CurrentParameters.WindowDpi);
-    CurrentParameters.SeparatorWidth = PhGetDpi(PH_SYSINFO_SEPARATOR_WIDTH, CurrentParameters.WindowDpi);
-    CurrentParameters.CpuPadding = PhGetDpi(PH_SYSINFO_CPU_PADDING, CurrentParameters.WindowDpi);
-    CurrentParameters.MemoryPadding = PhGetDpi(PH_SYSINFO_MEMORY_PADDING, CurrentParameters.WindowDpi);
+    CurrentParameters.PanelPadding = PhScaleToDisplay(PH_SYSINFO_PANEL_PADDING, CurrentParameters.WindowDpi);
+    CurrentParameters.WindowPadding = PhScaleToDisplay(PH_SYSINFO_WINDOW_PADDING, CurrentParameters.WindowDpi);
+    CurrentParameters.GraphPadding = PhScaleToDisplay(PH_SYSINFO_GRAPH_PADDING, CurrentParameters.WindowDpi);
+    CurrentParameters.SmallGraphWidth = PhScaleToDisplay(PH_SYSINFO_SMALL_GRAPH_WIDTH, CurrentParameters.WindowDpi);
+    CurrentParameters.SmallGraphPadding = PhScaleToDisplay(PH_SYSINFO_SMALL_GRAPH_PADDING, CurrentParameters.WindowDpi);
+    CurrentParameters.SeparatorWidth = PhScaleToDisplay(PH_SYSINFO_SEPARATOR_WIDTH, CurrentParameters.WindowDpi);
+    CurrentParameters.CpuPadding = PhScaleToDisplay(PH_SYSINFO_CPU_PADDING, CurrentParameters.WindowDpi);
+    CurrentParameters.MemoryPadding = PhScaleToDisplay(PH_SYSINFO_MEMORY_PADDING, CurrentParameters.WindowDpi);
 
+#if defined(SYSINFO_SCROLL_ANCHOR)
+    CurrentParameters.MinimumGraphHeight = PhGetIntegerSetting(SETTING_SYSINFO_MINIMUM_GRAPH_HEIGHT);
+#else
     CurrentParameters.MinimumGraphHeight =
         CurrentParameters.PanelPadding +
         CurrentParameters.MediumFontHeight +
         CurrentParameters.PanelPadding;
+#endif
 
     CurrentParameters.SectionViewGraphHeight =
         CurrentParameters.PanelPadding +
@@ -1271,6 +1351,10 @@ VOID PhSipDeleteParameters(
         DeleteFont(CurrentParameters.MediumFont);
     if (CurrentParameters.LargeFont)
         DeleteFont(CurrentParameters.LargeFont);
+
+    CurrentParameters.Font = NULL;
+    CurrentParameters.MediumFont = NULL;
+    CurrentParameters.LargeFont = NULL;
 }
 
 VOID PhSipUpdateColorParameters(
@@ -1413,7 +1497,6 @@ VOID PhSipDrawRestoreSummaryPanel(
     _In_ PDRAWITEMSTRUCT DrawItemStruct
     )
 {
-    HDC hdc;
     HDC bufferDc;
     HBITMAP bufferBitmap;
     HBITMAP oldBufferBitmap;
@@ -1424,11 +1507,8 @@ VOID PhSipDrawRestoreSummaryPanel(
         DrawItemStruct->rcItem.bottom - DrawItemStruct->rcItem.top
     };
 
-    if (!(hdc = GetDC(DrawItemStruct->hwndItem)))
-        return;
-
-    bufferDc = CreateCompatibleDC(hdc);
-    bufferBitmap = CreateCompatibleBitmap(hdc, bufferRect.right, bufferRect.bottom);
+    bufferDc = CreateCompatibleDC(DrawItemStruct->hDC);
+    bufferBitmap = CreateCompatibleBitmap(DrawItemStruct->hDC, bufferRect.right, bufferRect.bottom);
     oldBufferBitmap = SelectBitmap(bufferDc, bufferBitmap);
 
     SetBkMode(bufferDc, TRANSPARENT);
@@ -1478,7 +1558,7 @@ VOID PhSipDrawRestoreSummaryPanel(
     DrawText(bufferDc, L"Back", 4, &bufferRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     BitBlt(
-        hdc,
+        DrawItemStruct->hDC,
         DrawItemStruct->rcItem.left,
         DrawItemStruct->rcItem.top,
         DrawItemStruct->rcItem.right,
@@ -1492,15 +1572,12 @@ VOID PhSipDrawRestoreSummaryPanel(
     SelectBitmap(bufferDc, oldBufferBitmap);
     DeleteBitmap(bufferBitmap);
     DeleteDC(bufferDc);
-
-    ReleaseDC(DrawItemStruct->hwndItem, hdc);
 }
 
 VOID PhSipDrawSeparator(
     _In_ PDRAWITEMSTRUCT DrawItemStruct
     )
 {
-    HDC hdc;
     HDC bufferDc;
     HBITMAP bufferBitmap;
     HBITMAP oldBufferBitmap;
@@ -1511,11 +1588,8 @@ VOID PhSipDrawSeparator(
         DrawItemStruct->rcItem.bottom - DrawItemStruct->rcItem.top
     };
 
-    if (!(hdc = GetDC(DrawItemStruct->hwndItem)))
-        return;
-
-    bufferDc = CreateCompatibleDC(hdc);
-    bufferBitmap = CreateCompatibleBitmap(hdc, bufferRect.right, bufferRect.bottom);
+    bufferDc = CreateCompatibleDC(DrawItemStruct->hDC);
+    bufferBitmap = CreateCompatibleBitmap(DrawItemStruct->hDC, bufferRect.right, bufferRect.bottom);
     oldBufferBitmap = SelectBitmap(bufferDc, bufferBitmap);
 
     SetBkMode(bufferDc, TRANSPARENT);
@@ -1552,7 +1626,7 @@ VOID PhSipDrawSeparator(
     }
 
     BitBlt(
-        hdc,
+        DrawItemStruct->hDC,
         DrawItemStruct->rcItem.left,
         DrawItemStruct->rcItem.top,
         DrawItemStruct->rcItem.right,
@@ -1566,8 +1640,6 @@ VOID PhSipDrawSeparator(
     SelectBitmap(bufferDc, oldBufferBitmap);
     DeleteBitmap(bufferBitmap);
     DeleteDC(bufferDc);
-
-    ReleaseDC(DrawItemStruct->hwndItem, hdc);
 }
 
 VOID PhSipDrawPanel(
@@ -1785,12 +1857,14 @@ VOID PhSipDefaultDrawPanel(
 
     if (DrawPanel->Title)
     {
-        SelectFont(hdc, CurrentParameters.MediumFont);
+        HFONT oldFont = SelectFont(hdc, CurrentParameters.MediumFont);
         DrawText(hdc, DrawPanel->Title->Buffer, (ULONG)DrawPanel->Title->Length / sizeof(WCHAR), &rect, flags | DT_SINGLELINE);
+        if (oldFont) SelectFont(hdc, oldFont);
     }
 
     if (DrawPanel->SubTitle)
     {
+        HFONT oldFont;
         RECT measureRect;
         SIZE textSize;
         LONG lineHeight;
@@ -1803,7 +1877,7 @@ VOID PhSipDefaultDrawPanel(
         rect.top += CurrentParameters.MediumFontHeight + CurrentParameters.PanelPadding;
         measureRect = rect;
 
-        SelectFont(hdc, CurrentParameters.Font);
+        oldFont = SelectFont(hdc, CurrentParameters.Font);
         GetTextExtentPoint32(hdc, DrawPanel->SubTitle->Buffer, (ULONG)DrawPanel->SubTitle->Length / sizeof(WCHAR), &textSize);
         DrawText(hdc, DrawPanel->SubTitle->Buffer, (ULONG)DrawPanel->SubTitle->Length / sizeof(WCHAR), &measureRect, flags | DT_CALCRECT);
 
@@ -1857,31 +1931,241 @@ VOID PhSipDefaultDrawPanel(
                 }
             }
         }
+
+        if (oldFont)
+        {
+            SelectFont(hdc, oldFont);
+        }
     }
 }
+
+#if defined(SYSINFO_SCROLL_ANCHOR)
+BOOLEAN PhSipSummaryScrollEnabled(
+    VOID
+    )
+{
+    return CurrentView == SysInfoSummaryView && SummaryScrollEnabled && SectionList && SectionList->Count != 0;
+}
+
+VOID PhSipSetSummaryScrollOffset(
+    _In_ LONG Offset
+    )
+{
+    LONG delta;
+
+    if (Offset < 0)
+        Offset = 0;
+    else if (Offset > SummaryScrollMax)
+        Offset = SummaryScrollMax;
+
+    delta = SummaryScrollOffset - Offset;
+    SummaryScrollOffset = Offset;
+
+    if (delta != 0 && CurrentView == SysInfoSummaryView)
+    {
+        ScrollWindowEx(PhSipWindow, 0, delta, NULL, NULL, NULL, NULL, SW_ERASE | SW_INVALIDATE | SW_SCROLLCHILDREN);
+    }
+}
+
+VOID PhSipUpdateSummaryScrollInfo(
+    _In_ LONG AvailableHeight
+    )
+{
+    if (AvailableHeight <= 0 || !PhSipSummaryScrollEnabled())
+    {
+        ShowScrollBar(PhSipWindow, SB_VERT, FALSE);
+        SummaryScrollOffset = 0;
+        SummaryScrollMax = 0;
+        SummaryScrollPage = 0;
+        SummaryContentHeight = 0;
+        return;
+    }
+
+    SCROLLINFO si;
+    RtlZeroMemory(&si, sizeof(SCROLLINFO));
+    si.cbSize = sizeof(SCROLLINFO);
+    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+    si.nMin = 0;
+    si.nMax = max(0, SummaryContentHeight - 1);
+    si.nPage = AvailableHeight;
+    si.nPos = SummaryScrollOffset;
+    SetScrollInfo(PhSipWindow, SB_VERT, &si, TRUE);
+    SummaryScrollMax = max(0L, SummaryContentHeight - AvailableHeight);
+    ShowScrollBar(PhSipWindow, SB_VERT, SummaryScrollMax > 0);
+}
+
+VOID PhSipHandleSummaryVScroll(
+    _In_ WPARAM wParam
+    )
+{
+    if (!PhSipSummaryScrollEnabled())
+        return;
+
+    SCROLLINFO si;
+    RtlZeroMemory(&si, sizeof(SCROLLINFO));
+    si.cbSize = sizeof(SCROLLINFO);
+    si.fMask = SIF_TRACKPOS;
+    GetScrollInfo(PhSipWindow, SB_VERT, &si);
+
+    LONG newOffset = SummaryScrollOffset;
+    LONG scrollStep = SummaryGraphSpacing ? SummaryGraphSpacing : CurrentParameters.MinimumGraphHeight;
+
+    switch (LOWORD(wParam))
+    {
+    case SB_LINEUP:
+        newOffset -= scrollStep;
+        break;
+    case SB_LINEDOWN:
+        newOffset += scrollStep;
+        break;
+    case SB_PAGEUP:
+        newOffset -= SummaryScrollPage;
+        break;
+    case SB_PAGEDOWN:
+        newOffset += SummaryScrollPage;
+        break;
+    case SB_THUMBTRACK:
+    case SB_THUMBPOSITION:
+        newOffset = si.nTrackPos;
+        break;
+    }
+
+    PhSipSetSummaryScrollOffset(newOffset);
+    PhSipLayoutSummaryView();
+}
+
+VOID PhSipHandleSummaryMouseWheel(
+    _In_ WPARAM wParam
+    )
+{
+    if (!PhSipSummaryScrollEnabled())
+        return;
+
+    SHORT delta = HIWORD(wParam);
+    if (!delta)
+        return;
+
+    LONG lines = delta / WHEEL_DELTA;
+    if (lines == 0)
+        lines = (delta > 0) ? 1 : -1;
+
+    LONG scrollStep = SummaryGraphSpacing ? SummaryGraphSpacing : CurrentParameters.MinimumGraphHeight;
+    PhSipSetSummaryScrollOffset(SummaryScrollOffset - lines * scrollStep);
+    PhSipLayoutSummaryView();
+}
+
+VOID PhSipEnsureSummarySectionVisible(
+    _In_ PPH_SYSINFO_SECTION Section
+    )
+{
+    if (!PhSipSummaryScrollEnabled() || !SectionList)
+        return;
+
+    ULONG index;
+    RECT clientRect;
+
+    for (index = 0; index < SectionList->Count; index++)
+    {
+        if (SectionList->Items[index] == Section)
+            break;
+    }
+
+    if (index == SectionList->Count)
+        return;
+
+    LONG top = CurrentParameters.WindowPadding + (LONG)index * SummaryGraphSpacing;
+    LONG bottom = top + SummaryGraphHeight;
+
+    if (!PhGetClientRect(PhSipWindow, &clientRect))
+        return;
+
+    LONG viewportTop = CurrentParameters.WindowPadding;
+    LONG viewportBottom = clientRect.bottom - CurrentParameters.WindowPadding;
+    LONG relativeTop = top - SummaryScrollOffset;
+    LONG relativeBottom = bottom - SummaryScrollOffset;
+    LONG newOffset = SummaryScrollOffset;
+
+    if (relativeTop < viewportTop)
+    {
+        newOffset -= (viewportTop - relativeTop);
+    }
+    else if (relativeBottom > viewportBottom)
+    {
+        newOffset += (relativeBottom - viewportBottom);
+    }
+
+    if (newOffset != SummaryScrollOffset)
+    {
+        PhSipSetSummaryScrollOffset(newOffset);
+        PhSipLayoutSummaryView();
+    }
+}
+#endif
 
 VOID PhSipLayoutSummaryView(
     VOID
     )
 {
     RECT clientRect;
-    ULONG availableHeight;
-    ULONG availableWidth;
-    ULONG graphHeight;
+    LONG availableHeight;
+    LONG availableWidth;
+    LONG graphHeight;
     ULONG i;
     PPH_SYSINFO_SECTION section;
     HDWP deferHandle;
-    ULONG y;
+    LONG y;
 
     if (!PhGetClientRect(PhSipWindow, &clientRect))
         return;
 
     availableHeight = clientRect.bottom - CurrentParameters.WindowPadding * 2;
     availableWidth = clientRect.right - CurrentParameters.WindowPadding * 2;
+
+#if defined(SYSINFO_SCROLL_ANCHOR)
+    if (!SectionList || SectionList->Count == 0)
+        return;
+
+    BOOL useScroll = PhSipSummaryScrollEnabled();
+    LONG numerator = (LONG)availableHeight - (LONG)CurrentParameters.GraphPadding * (SectionList->Count - 1);
+
+    if (numerator < 0)
+        numerator = 0;
+
+    graphHeight = numerator / SectionList->Count;
+
+    if (useScroll)
+    {
+        if ((LONG)graphHeight < (LONG)CurrentParameters.MinimumGraphHeight)
+            graphHeight = CurrentParameters.MinimumGraphHeight;
+
+        SummaryGraphHeight = graphHeight;
+        SummaryGraphSpacing = graphHeight + CurrentParameters.GraphPadding;
+        SummaryContentHeight = CurrentParameters.WindowPadding * 2 + SectionList->Count * SummaryGraphSpacing - CurrentParameters.GraphPadding;
+
+        SummaryScrollPage = availableHeight ? availableHeight : 1;
+        SummaryScrollMax = max(0L, SummaryContentHeight - (LONG)clientRect.bottom);
+        PhSipSetSummaryScrollOffset(SummaryScrollOffset);
+    }
+    else
+    {
+        SummaryGraphHeight = graphHeight;
+        SummaryGraphSpacing = graphHeight + CurrentParameters.GraphPadding;
+        SummaryContentHeight = availableHeight;
+
+        SummaryScrollOffset = 0;
+        SummaryScrollMax = 0;
+    }
+#else
     graphHeight = (availableHeight - CurrentParameters.GraphPadding * (SectionList->Count - 1)) / SectionList->Count;
+#endif
 
     deferHandle = BeginDeferWindowPos(SectionList->Count);
+
+#if defined(SYSINFO_SCROLL_ANCHOR)
+    y = CurrentParameters.WindowPadding - SummaryScrollOffset;
+#else
     y = CurrentParameters.WindowPadding;
+#endif
 
     for (i = 0; i < SectionList->Count; i++)
     {
@@ -1903,6 +2187,10 @@ VOID PhSipLayoutSummaryView(
     }
 
     EndDeferWindowPos(deferHandle);
+
+#if defined(SYSINFO_SCROLL_ANCHOR)
+    PhSipUpdateSummaryScrollInfo(clientRect.bottom);
+#endif
 }
 
 VOID PhSipLayoutSectionView(
@@ -1910,14 +2198,18 @@ VOID PhSipLayoutSectionView(
     )
 {
     RECT clientRect;
-    ULONG availableHeight;
-    ULONG availableWidth;
-    ULONG graphHeight;
+    LONG availableHeight;
+    LONG availableWidth;
+    LONG graphHeight;
     ULONG i;
     PPH_SYSINFO_SECTION section;
     HDWP deferHandle;
     ULONG y;
     ULONG containerLeft;
+
+#if defined(SYSINFO_SCROLL_ANCHOR)
+    ShowScrollBar(PhSipWindow, SB_VERT, FALSE);
+#endif
 
     if (!PhGetClientRect(PhSipWindow, &clientRect))
         return;
@@ -2156,6 +2448,7 @@ VOID PhSipCreateSectionDialog(
     }
 }
 
+_Function_class_(WNDPROC)
 LRESULT CALLBACK PhSipGraphHookWndProc(
     _In_ HWND hwnd,
     _In_ UINT uMsg,
@@ -2321,6 +2614,7 @@ LRESULT CALLBACK PhSipGraphHookWndProc(
     return CallWindowProc(oldWndProc, hwnd, uMsg, wParam, lParam);
 }
 
+_Function_class_(WNDPROC)
 LRESULT CALLBACK PhSipPanelHookWndProc(
     _In_ HWND hwnd,
     _In_ UINT uMsg,
@@ -2455,7 +2749,7 @@ VOID PhSipUpdateThemeData(
     VOID
     )
 {
-    LONG dpi = PhGetWindowDpi(PhSipWindow);
+    LONG dpi = CurrentParameters.WindowDpi;
 
     if (ThemeData)
     {

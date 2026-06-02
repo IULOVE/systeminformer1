@@ -137,41 +137,41 @@ INT_PTR CALLBACK EspServiceDependenciesDlgProc(
                 PhClearReference(&errorMessage);
             }
 
-            PhInitializeWindowTheme(WindowHandle, !!PhGetIntegerSetting(L"EnableThemeSupport"));
+            PhInitializeWindowTheme(WindowHandle, !!PhGetIntegerSetting(SETTING_ENABLE_THEME_SUPPORT));
         }
         break;
     case WM_DESTROY:
         {
             PhRemoveWindowContext(WindowHandle, PH_WINDOW_CONTEXT_DEFAULT);
 
-            PhDeleteLayoutManager(&context->LayoutManager);
+             PhDeleteLayoutManager(&context->LayoutManager);
 
-            PhFree(context);
-        }
-        break;
-    case WM_SIZE:
-        {
-            PhLayoutManagerLayout(&context->LayoutManager);
+             PhFree(context);
+         }
+         break;
+     case WM_SIZE:
+         {
+             PhLayoutManagerLayout(&context->LayoutManager);
 
-            if (context->ServiceListHandle)
-                EspLayoutServiceListControl(WindowHandle, context->ServiceListHandle);
-        }
-        break;
-    case WM_DPICHANGED_AFTERPARENT:
-        {
-            PhLayoutManagerUpdate(&context->LayoutManager, LOWORD(wParam));
-            PhLayoutManagerLayout(&context->LayoutManager);
+             if (context->ServiceListHandle)
+                 EspLayoutServiceListControl(WindowHandle, context->ServiceListHandle);
+         }
+         break;
+     case WM_DPICHANGED_AFTERPARENT:
+         {
+             PhLayoutManagerUpdate(&context->LayoutManager, PhGetWindowDpi(WindowHandle));
+             PhLayoutManagerLayout(&context->LayoutManager);
 
-            if (context->ServiceListHandle)
-                EspLayoutServiceListControl(WindowHandle, context->ServiceListHandle);
-        }
-        break;
-    }
+             if (context->ServiceListHandle)
+                 EspLayoutServiceListControl(WindowHandle, context->ServiceListHandle);
+         }
+         break;
+     }
 
-    return FALSE;
-}
+     return FALSE;
+ }
 
-INT_PTR CALLBACK EspServiceDependentsDlgProc(
+ INT_PTR CALLBACK EspServiceDependentsDlgProc(
     _In_ HWND WindowHandle,
     _In_ UINT WindowMessage,
     _In_ WPARAM wParam,
@@ -271,7 +271,7 @@ INT_PTR CALLBACK EspServiceDependentsDlgProc(
                 PhClearReference(&errorMessage);
             }
 
-            PhInitializeWindowTheme(WindowHandle, !!PhGetIntegerSetting(L"EnableThemeSupport"));
+            PhInitializeWindowTheme(WindowHandle, !!PhGetIntegerSetting(SETTING_ENABLE_THEME_SUPPORT));
         }
         break;
     case WM_DESTROY:
@@ -293,7 +293,7 @@ INT_PTR CALLBACK EspServiceDependentsDlgProc(
         break;
     case WM_DPICHANGED_AFTERPARENT:
         {
-            PhLayoutManagerUpdate(&context->LayoutManager, LOWORD(wParam));
+            PhLayoutManagerUpdate(&context->LayoutManager, PhGetWindowDpi(WindowHandle));
             PhLayoutManagerLayout(&context->LayoutManager);
 
             if (context->ServiceListHandle)

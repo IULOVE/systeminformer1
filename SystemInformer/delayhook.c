@@ -18,6 +18,7 @@
 #include <Vssym32.h>
 
 #include "settings.h"
+#include <phsettings.h>
 
 // https://learn.microsoft.com/en-us/windows/win32/winmsg/about-window-procedures#window-procedure-superclassing
 static WNDPROC PhDefaultMenuWindowProcedure = NULL;
@@ -195,7 +196,7 @@ LRESULT CALLBACK PhStaticWindowHookProcedure(
 {
     if (WindowMessage == WM_NCCREATE)
     {
-        LONG_PTR style = PhGetWindowStyle(WindowHandle);
+        ULONG style = PhGetWindowStyle(WindowHandle);
 
         if ((style & SS_ICON) == SS_ICON)
         {
@@ -249,7 +250,7 @@ LRESULT CALLBACK PhStaticWindowHookProcedure(
                     static HFONT hCheckFont = NULL;
 
                     HDC hdc = BeginPaint(WindowHandle, &ps);
-                    clientRect = ps.rcPaint;
+                    GetClientRect(WindowHandle, &clientRect);
                     HDC bufferDc = CreateCompatibleDC(hdc);
                     HBITMAP bufferBitmap = CreateCompatibleBitmap(hdc, clientRect.right, clientRect.bottom);
                     HBITMAP oldBufferBitmap = SelectBitmap(bufferDc, bufferBitmap);
@@ -347,6 +348,7 @@ LRESULT CALLBACK PhStaticWindowHookProcedure(
 
 typedef struct _PHP_THEME_WINDOW_STATUSBAR_CONTEXT
 {
+    LONG WindowDpi;
     struct
     {
        BOOLEAN Flags;
@@ -460,7 +462,7 @@ VOID ThemeWindowStatusBarDrawPart(
     if (!CallWindowProc(PhDefaultStatusbarWindowProcedure, WindowHandle, SB_GETTEXT, (WPARAM)Index, (LPARAM)text))
         return;
 
-    if (PhPtInRect(&blockRect, Context->CursorPos))
+    if (PhPtInRect(&blockRect, &Context->CursorPos))
     {
         SetTextColor(bufferDc, PhThemeWindowTextColor);
         SetDCBrushColor(bufferDc, PhThemeWindowHighlightColor);
@@ -523,7 +525,7 @@ VOID ThemeWindowRenderStatusBar(
         RECT sizeGripRect;
         LONG dpi;
 
-        dpi = PhGetWindowDpi(WindowHandle);
+        dpi = Context->WindowDpi;
         sizeGripRect.left = clientRect->right - PhGetSystemMetrics(SM_CXHSCROLL, dpi);
         sizeGripRect.top = clientRect->bottom - PhGetSystemMetrics(SM_CYVSCROLL, dpi);
         sizeGripRect.right = clientRect->right;
@@ -566,7 +568,8 @@ LRESULT CALLBACK PhStatusBarWindowHookProcedure(
     if (WindowMessage == WM_NCCREATE)
     {
         context = PhAllocateZero(sizeof(PHP_THEME_WINDOW_STATUSBAR_CONTEXT));
-        context->ThemeHandle = PhOpenThemeData(WindowHandle, VSCLASS_STATUS, PhGetWindowDpi(WindowHandle));
+        context->WindowDpi = PhGetWindowDpi(WindowHandle);
+        context->ThemeHandle = PhOpenThemeData(WindowHandle, VSCLASS_STATUS, context->WindowDpi);
         context->CursorPos.x = LONG_MIN;
         context->CursorPos.y = LONG_MIN;
         PhSetWindowContext(WindowHandle, LONG_MAX, context);
@@ -602,7 +605,8 @@ LRESULT CALLBACK PhStatusBarWindowHookProcedure(
                     context->ThemeHandle = NULL;
                 }
 
-                context->ThemeHandle = PhOpenThemeData(WindowHandle, VSCLASS_STATUS, PhGetWindowDpi(WindowHandle));
+                context->WindowDpi = PhGetWindowDpi(WindowHandle);
+                context->ThemeHandle = PhOpenThemeData(WindowHandle, VSCLASS_STATUS, context->WindowDpi);
             }
             break;
         case WM_ERASEBKGND:
@@ -640,71 +644,56 @@ LRESULT CALLBACK PhStatusBarWindowHookProcedure(
             break;
         case WM_PAINT:
             {
-                //PAINTSTRUCT ps;
-                //HDC BufferedHDC;
-                //HPAINTBUFFER BufferedPaint;
-                //
-                //if (!BeginPaint(WindowHandle, &ps))
-                //    break;
-                //
-                //if (BufferedPaint = BeginBufferedPaint(ps.hdc, &ps.rcPaint, BPBF_COMPATIBLEBITMAP, NULL, &BufferedHDC))
-                //{
-                //    ThemeWindowRenderStatusBar(context, WindowHandle, BufferedHDC, &ps.rcPaint, oldWndProc);
-                //    EndBufferedPaint(BufferedPaint, TRUE);
-                //}
-                //else
+                PAINTSTRUCT paintStruct;
+                RECT clientRect;
+                RECT bufferRect;
+                HDC hdc;
+
+                if (!(hdc = BeginPaint(WindowHandle, &paintStruct)))
+                    break;
+
+                if (!PhGetClientRect(WindowHandle, &clientRect))
                 {
-                    RECT clientRect;
-                    RECT bufferRect;
-                    HDC hdc;
-
-                    if (!PhGetClientRect(WindowHandle, &clientRect))
-                        break;
-
-                    bufferRect.left = 0;
-                    bufferRect.top = 0;
-                    bufferRect.right = clientRect.right - clientRect.left;
-                    bufferRect.bottom = clientRect.bottom - clientRect.top;
-
-                    hdc = GetDC(WindowHandle);
-
-                    if (context->BufferedDc && (
-                        context->BufferedContextRect.right < bufferRect.right ||
-                        context->BufferedContextRect.bottom < bufferRect.bottom))
-                    {
-                        ThemeWindowStatusBarDestroyBufferedContext(context);
-                    }
-
-                    if (!context->BufferedDc)
-                    {
-                        ThemeWindowStatusBarCreateBufferedContext(context, hdc, &bufferRect);
-                    }
-
-                    if (context->BufferedDc)
-                    {
-                        ThemeWindowRenderStatusBar(
-                            context,
-                            WindowHandle,
-                            context->BufferedDc,
-                            &clientRect
-                            );
-
-                        BitBlt(hdc, clientRect.left, clientRect.top, clientRect.right, clientRect.bottom, context->BufferedDc, 0, 0, SRCCOPY);
-                    }
-
-                    ReleaseDC(WindowHandle, hdc);
+                    EndPaint(WindowHandle, &paintStruct);
+                    return 0;
                 }
 
-                //EndPaint(WindowHandle, &ps);
+                bufferRect.left = 0;
+                bufferRect.top = 0;
+                bufferRect.right = clientRect.right - clientRect.left;
+                bufferRect.bottom = clientRect.bottom - clientRect.top;
+
+                if (context->BufferedDc && (
+                    context->BufferedContextRect.right < bufferRect.right ||
+                    context->BufferedContextRect.bottom < bufferRect.bottom))
+                {
+                    ThemeWindowStatusBarDestroyBufferedContext(context);
+                }
+
+                if (!context->BufferedDc)
+                {
+                    ThemeWindowStatusBarCreateBufferedContext(context, hdc, &bufferRect);
+                }
+
+                if (context->BufferedDc)
+                {
+                    ThemeWindowRenderStatusBar(
+                        context,
+                        WindowHandle,
+                        context->BufferedDc,
+                        &clientRect
+                        );
+
+                    BitBlt(hdc, clientRect.left, clientRect.top, clientRect.right, clientRect.bottom, context->BufferedDc, 0, 0, SRCCOPY);
+                }
+
+                EndPaint(WindowHandle, &paintStruct);
             }
-            goto DefaultWndProc;
+            return 0;
         }
     }
 
     return CallWindowProc(PhDefaultStatusbarWindowProcedure, WindowHandle, WindowMessage, wParam, lParam);
-
-DefaultWndProc:
-    return DefWindowProc(WindowHandle, WindowMessage, wParam, lParam);
 }
 
 LRESULT CALLBACK PhEditWindowHookProcedure(
@@ -726,20 +715,21 @@ LRESULT CALLBACK PhEditWindowHookProcedure(
             // The searchbox control does its own theme drawing.
             if (PhGetWindowContext(WindowHandle, SHRT_MAX))
                 break;
+            if (!PhGetWindowRect(WindowHandle, &windowRect))
+                break;
 
             updateRegion = (HRGN)wParam;
 
             if (updateRegion == HRGN_FULL)
                 updateRegion = NULL;
 
-            flags = DCX_WINDOW | DCX_LOCKWINDOWUPDATE | DCX_USESTYLE;
+            flags = DCX_WINDOW | DCX_CACHE | DCX_USESTYLE;
 
             if (updateRegion)
                 flags |= DCX_INTERSECTRGN | DCX_NODELETERGN;
 
             if (hdc = GetDCEx(WindowHandle, updateRegion, flags))
             {
-                PhGetWindowRect(WindowHandle, &windowRect);
                 PhOffsetRect(&windowRect, -windowRect.left, -windowRect.top);
 
                 if (GetFocus() == WindowHandle)
@@ -766,6 +756,7 @@ LRESULT CALLBACK PhEditWindowHookProcedure(
 
 typedef struct _PHP_THEME_WINDOW_HEADER_CONTEXT
 {
+    LONG WindowDpi;
     HTHEME ThemeHandle;
     BOOLEAN MouseActive;
     POINT CursorPos;
@@ -807,7 +798,7 @@ VOID ThemeWindowRenderHeaderControl(
             continue;
         }
 
-        if (PhPtInRect(&headerRect, Context->CursorPos))
+        if (PhPtInRect(&headerRect, &Context->CursorPos))
         {
             SetTextColor(bufferDc, PhThemeWindowTextColor);
             SetDCBrushColor(bufferDc, PhThemeWindowBackground2Color); // PhThemeWindowHighlightColor);
@@ -958,7 +949,7 @@ LRESULT CALLBACK PhHeaderWindowHookProcedure(
 
             if (PhEqualStringZ(windowClassName, L"PhTreeNew", FALSE))
             {
-                LONG_PTR windowStyle = PhGetWindowStyle(createStruct->hwndParent);
+                ULONG windowStyle = PhGetWindowStyle(createStruct->hwndParent);
 
                 if (BooleanFlagOn(windowStyle, TN_STYLE_CUSTOM_HEADERDRAW))
                 {
@@ -970,7 +961,8 @@ LRESULT CALLBACK PhHeaderWindowHookProcedure(
         }
 
         context = PhAllocateZero(sizeof(PHP_THEME_WINDOW_HEADER_CONTEXT));
-        context->ThemeHandle = PhOpenThemeData(WindowHandle, VSCLASS_HEADER, PhGetWindowDpi(WindowHandle));
+        context->WindowDpi = PhGetWindowDpi(WindowHandle);
+        context->ThemeHandle = PhOpenThemeData(WindowHandle, VSCLASS_HEADER, context->WindowDpi);
         context->CursorPos.x = LONG_MIN;
         context->CursorPos.y = LONG_MIN;
         PhSetWindowContext(WindowHandle, LONG_MAX, context);
@@ -1008,7 +1000,8 @@ LRESULT CALLBACK PhHeaderWindowHookProcedure(
                     context->ThemeHandle = NULL;
                 }
 
-                context->ThemeHandle = PhOpenThemeData(WindowHandle, VSCLASS_HEADER, PhGetWindowDpi(WindowHandle));
+                context->WindowDpi = PhGetWindowDpi(WindowHandle);
+        context->ThemeHandle = PhOpenThemeData(WindowHandle, VSCLASS_HEADER, context->WindowDpi);
             }
             break;
         case WM_ERASEBKGND:
@@ -1634,12 +1627,12 @@ BOOL WINAPI PhSystemParametersInfoHook(
 HRESULT WINAPI PhDrawThemeTextHook(
     _In_ HTHEME  hTheme,
     _In_ HDC     hdc,
-    _In_ int     iPartId,
-    _In_ int     iStateId,
+    _In_ LONG    iPartId,
+    _In_ LONG    iStateId,
     _In_ LPCWSTR pszText,
-    _In_ int     cchText,
-    _In_ DWORD   dwTextFlags,
-    _In_ DWORD   dwTextFlags2,
+    _In_ LONG    cchText,
+    _In_ ULONG   dwTextFlags,
+    _In_ ULONG   dwTextFlags2,
     _In_ LPCRECT pRect
     )
 {
@@ -1711,7 +1704,8 @@ int PhDetoursComCtl32DrawTextW(
         {
             if (PhBeginInitOnce(&initOnce))
             {
-                HTHEME hTextTheme = PhOpenThemeData(WindowHandle, VSCLASS_TEXTSTYLE, PhGetWindowDpi(WindowHandle));
+                LONG windowDpi = PhGetWindowDpi(WindowHandle);
+                HTHEME hTextTheme = PhOpenThemeData(WindowHandle, VSCLASS_TEXTSTYLE, windowDpi);
                 if (hTextTheme)
                 {
                     PhGetThemeColor(hTextTheme, TEXT_HYPERLINKTEXT, TS_HYPERLINK_NORMAL, TMT_TEXTCOLOR, &colLinkNormal);
@@ -1788,7 +1782,6 @@ BOOLEAN CALLBACK PhInitializeTaskDialogTheme(
     )
 {
     WCHAR windowClassName[MAX_PATH];
-    PTASKDIALOG_COMMON_CONTEXT context;
     BOOLEAN windowHasContext = !!PhGetWindowContext(WindowHandle, TASKDIALOG_CONTEXT_TAG);
 
     if (CallbackData && !windowHasContext)
@@ -1809,7 +1802,6 @@ BOOLEAN CALLBACK PhInitializeTaskDialogTheme(
 
     PhEnumChildWindows(
         WindowHandle,
-        0x1000,
         PhInitializeTaskDialogTheme,
         NULL
         );
@@ -1819,25 +1811,29 @@ BOOLEAN CALLBACK PhInitializeTaskDialogTheme(
 
     GETCLASSNAME_OR_NULL(WindowHandle, windowClassName);
 
-    context = PhAllocateZero(sizeof(TASKDIALOG_COMMON_CONTEXT));
-    context->DefaultWindowProc = PhSetWindowProcedure(WindowHandle, ThemeTaskDialogMasterSubclass);
-    PhSetWindowContext(WindowHandle, TASKDIALOG_CONTEXT_TAG, context);
+    {
+        PTASKDIALOG_COMMON_CONTEXT context;
 
-    if (PhEqualStringZ(windowClassName, WC_BUTTON, FALSE) ||
-        PhEqualStringZ(windowClassName, WC_SCROLLBAR, FALSE))
-    {
-        PhSetControlTheme(WindowHandle, L"DarkMode_Explorer");
-    }
-    //else if (PhEqualStringZ(windowClassName, WC_LINK, FALSE))
-    //{
-    //    PhAllowDarkModeForWindow(WindowHandle);   // this doesn't work, idk why
-    //}
-    else if (PhEqualStringZ(windowClassName, L"DirectUIHWND", FALSE))
-    {
-        //WINDOWPLACEMENT pos = { 0 };
-        //GetWindowPlacement(GetParent(WindowHandle), &pos);
-        PhSetControlTheme(WindowHandle, L"DarkMode_Explorer");
-        //SetWindowPlacement(GetParent(WindowHandle), &pos);
+        context = PhAllocateZero(sizeof(TASKDIALOG_COMMON_CONTEXT));
+        context->DefaultWindowProc = PhSetWindowProcedure(WindowHandle, ThemeTaskDialogMasterSubclass);
+        PhSetWindowContext(WindowHandle, TASKDIALOG_CONTEXT_TAG, context);
+
+        if (PhEqualStringZ(windowClassName, WC_BUTTON, FALSE) ||
+            PhEqualStringZ(windowClassName, WC_SCROLLBAR, FALSE))
+        {
+            PhSetControlTheme(WindowHandle, L"DarkMode_Explorer");
+        }
+        //else if (PhEqualStringZ(windowClassName, WC_LINK, FALSE))
+        //{
+        //    PhAllowDarkModeForWindow(WindowHandle);   // this doesn't work, idk why
+        //}
+        else if (PhEqualStringZ(windowClassName, L"DirectUIHWND", FALSE))
+        {
+            //WINDOWPLACEMENT pos = { 0 };
+            //GetWindowPlacement(GetParent(WindowHandle), &pos);
+            PhSetControlTheme(WindowHandle, L"DarkMode_Explorer");
+            //SetWindowPlacement(GetParent(WindowHandle), &pos);
+        }
     }
 
     return TRUE;
@@ -1891,7 +1887,7 @@ LRESULT CALLBACK ThemeTaskDialogMasterSubclass(
                 LPNMCUSTOMDRAW customDraw = (LPNMCUSTOMDRAW)lParam;
                 WCHAR className[MAX_PATH];
 
-                if (!GetClassName(customDraw->hdr.hwndFrom, className, RTL_NUMBER_OF(className)))
+                if (!NT_SUCCESS(PhGetClassName(customDraw->hdr.hwndFrom, className, RTL_NUMBER_OF(className), NULL)))
                     className[0] = UNICODE_NULL;
                 if (PhEqualStringZ(className, WC_BUTTON, FALSE))
                 {
@@ -2076,7 +2072,7 @@ VOID PhInitializeSuperclassControls(
     VOID
     )
 {
-    PhDefaultEnableStreamerMode = !!PhGetIntegerSetting(L"EnableStreamerMode");
+    PhDefaultEnableStreamerMode = !!PhGetIntegerSetting(SETTING_ENABLE_STREAMER_MODE);
 
     if (PhEnableThemeAcrylicSupport && !PhEnableThemeSupport)
         PhEnableThemeAcrylicSupport = FALSE;
@@ -2087,10 +2083,10 @@ VOID PhInitializeSuperclassControls(
     {
         if (WindowsVersion >= WINDOWS_11)
         {
-            PhDefaultEnableThemeAcrylicWindowSupport = !!PhGetIntegerSetting(L"EnableThemeAcrylicWindowSupport");
+            PhDefaultEnableThemeAcrylicWindowSupport = !!PhGetIntegerSetting(SETTING_ENABLE_THEME_ACRYLIC_WINDOW_SUPPORT);
         }
 
-        PhDefaultEnableThemeAnimation = !!PhGetIntegerSetting(L"EnableThemeAnimation");
+        PhDefaultEnableThemeAnimation = !!PhGetIntegerSetting(SETTING_ENABLE_THEME_ANIMATION);
 
         PhRegisterDialogSuperClass();
         PhRegisterMenuSuperClass();

@@ -20,6 +20,7 @@ extern "C" {
 EXTERN_C PVOID PhInstanceHandle;
 EXTERN_C PCWSTR PhApplicationName;
 EXTERN_C HANDLE PhHeapHandle;
+EXTERN_C BOOLEAN PhEnableHighResolution;
 EXTERN_C RTL_OSVERSIONINFOEX PhOsVersion;
 EXTERN_C ULONG WindowsVersion;
 
@@ -49,7 +50,8 @@ EXTERN_C ULONG WindowsVersion;
 #define WINDOWS_11_23H2 116 // October, 2023    // Build 22631
 #define WINDOWS_11_24H2 117 // October, 2024    // Build 26100
 #define WINDOWS_11_25H2 118 // October, 2025    // Build 26200
-#define WINDOWS_MAX WINDOWS_11_25H2
+#define WINDOWS_11_26H1 119                     // Build 28000
+#define WINDOWS_MAX WINDOWS_11_26H1
 #define WINDOWS_NEW ULONG_MAX
 
 #ifdef DEBUG

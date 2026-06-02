@@ -183,7 +183,7 @@ VOID WeInitializeWindowTreeImageList(
                 PhImageListSetBkColor(Context->NodeImageList, CLR_NONE);
                 TreeNew_SetImageList(Context->TreeNewHandle, Context->NodeImageList);
 
-                PhGetStockApplicationIcon(&iconSmall, NULL);
+                PhGetStockApplicationIcon(&iconSmall, NULL, dpiValue);
                 PhImageListAddIcon(Context->NodeImageList, iconSmall);
             }
         }
@@ -494,7 +494,7 @@ BOOLEAN NTAPI WepWindowTreeNewCallback(
 
             if (node->WindowMessageOnly)
             {
-                getNodeColor->BackColor = PhGetIntegerSetting(L"ColorServiceProcesses");
+                getNodeColor->BackColor = PhGetIntegerSetting(SETTING_COLOR_SERVICE_PROCESSES);
             }
 
             getNodeColor->Flags = TN_CACHE;

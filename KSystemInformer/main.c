@@ -6,7 +6,7 @@
  * Authors:
  *
  *     wj32    2010-2016
- *     jxy-s   2021-2024
+ *     jxy-s   2021-2026
  *
  */
 
@@ -83,6 +83,7 @@ VOID KphpDriverCleanup(
 {
     KPH_PAGED_CODE_PASSIVE();
 
+    KphSiloInformerStop();
     KphDebugInformerStop();
     KphRegistryInformerStop();
     KphObjectInformerStop();
@@ -92,9 +93,11 @@ VOID KphpDriverCleanup(
     KphProcessInformerStop();
     KphFltUnregister();
     KphCidCleanup();
+    KphCleanupInformer();
     KphCleanupDynData();
     KphCleanupVerify();
     KphCleanupHashing();
+    KphCleanupThreading();
     KphCleanupParameters();
 
     KsiUninitialize(DriverObject, 0);
@@ -198,21 +201,11 @@ NTSTATUS DriverEntry(
     }
 
     KphDynamicImport();
-
     KphObjectInitialize();
-
+    KphInitializeRingBuffer();
     KphInitializeParameters(RegistryPath);
-
-    status = KphInitializeAlloc();
-    if (!NT_SUCCESS(status))
-    {
-        KphTracePrint(TRACE_LEVEL_ERROR,
-                      GENERAL,
-                      "KphInitializeAlloc failed: %!STATUS!",
-                      status);
-
-        goto Exit;
-    }
+    KphInitializeAlloc();
+    KphInitializeThreading();
 
     status = KphInitializeKnownDll();
     if (!NT_SUCCESS(status))
@@ -230,7 +223,7 @@ NTSTATUS DriverEntry(
     {
         KphTracePrint(TRACE_LEVEL_ERROR,
                       GENERAL,
-                      "KphLocateKernelRevision failed: %!STATUS!",
+                      "KphGetKernelVersion failed: %!STATUS!",
                       status);
 
         goto Exit;
@@ -270,9 +263,7 @@ NTSTATUS DriverEntry(
     }
 
     KphInitializeDynData();
-
     KphInitializeProtection();
-
     KphInitializeSessionToken();
 
     status = KphInitializeStackBackTrace();
@@ -281,6 +272,17 @@ NTSTATUS DriverEntry(
         KphTracePrint(TRACE_LEVEL_ERROR,
                       GENERAL,
                       "Failed to initialize stack back trace: %!STATUS!",
+                      status);
+
+        goto Exit;
+    }
+
+    status = KphInitializeInformer();
+    if (!NT_SUCCESS(status))
+    {
+        KphTracePrint(TRACE_LEVEL_ERROR,
+                      GENERAL,
+                      "Failed to initialize informer: %!STATUS!",
                       status);
 
         goto Exit;
@@ -384,6 +386,16 @@ NTSTATUS DriverEntry(
         KphTracePrint(TRACE_LEVEL_ERROR,
                       GENERAL,
                       "Failed to start debug informer: %!STATUS!",
+                      status);
+        goto Exit;
+    }
+
+    status = KphSiloInformerStart();
+    if (!NT_SUCCESS(status))
+    {
+        KphTracePrint(TRACE_LEVEL_ERROR,
+                      GENERAL,
+                      "Failed to start silo informer: %!STATUS!",
                       status);
         goto Exit;
     }

@@ -12,6 +12,7 @@
 
 #include <phapp.h>
 #include <mainwnd.h>
+#include <procprv.h>
 
 #include <cpysave.h>
 #include <emenu.h>
@@ -40,11 +41,17 @@
 
 #include <mainwndp.h>
 
+typedef struct _PH_MWP_KPH
+{
+    KPH_LEVEL Level;
+    BOOLEAN DynDataActive;
+} PH_MWP_KPH, *PPH_MWP_KPH;
+
 HWND PhMainWndHandle = NULL;
 BOOLEAN PhMainWndExiting = FALSE;
 BOOLEAN PhMainWndEarlyExit = FALSE;
 WNDPROC PhMainWndProc = PhMwpWndProc;
-KPH_LEVEL PhMainWndLevel = KphLevelNone;
+PH_MWP_KPH PhMainWndKph = { KphLevelNone, FALSE };
 
 PH_PROVIDER_REGISTRATION PhMwpProcessProviderRegistration;
 PH_PROVIDER_REGISTRATION PhMwpServiceProviderRegistration;
@@ -73,6 +80,13 @@ static HMENU SubMenuHandles[5];
 static PPH_EMENU SubMenuObjects[5];
 static ULONG SelectedUserSessionId = ULONG_MAX;
 
+/**
+ * Initializes the main window and data providers.
+ *
+ * \param ShowCommand The initial show command (e.g., SW_SHOW, SW_HIDE, SW_MAXIMIZE).
+ * \return TRUE if initialization succeeded, FALSE otherwise.
+ * \remarks Delayed initialization tasks are queued for execution after the window is shown.
+ */
 BOOLEAN PhMainWndInitialization(
     _In_ LONG ShowCommand
     )
@@ -98,7 +112,7 @@ BOOLEAN PhMainWndInitialization(
     windowRectangle.Position = PhGetIntegerPairSetting(SETTING_MAIN_WINDOW_POSITION);
     PhRectangleToRect(&windowRect, &windowRectangle);
     windowDpi = PhGetMonitorDpi(NULL, &windowRect);
-    windowRectangle.Size = PhGetScalableIntegerPairSetting(SETTING_MAIN_WINDOW_SIZE, TRUE, windowDpi)->Pair;
+    windowRectangle.Size = PhGetScalableIntegerPairSetting(SETTING_MAIN_WINDOW_SIZE, TRUE, windowDpi).Pair;
     PhAdjustRectangleToWorkingArea(NULL, &windowRectangle);
 
     // Initialize the window.
@@ -121,7 +135,7 @@ BOOLEAN PhMainWndInitialization(
         return FALSE;
 
     // Initialize window metrics.
-    PhMwpInitializeMetrics(PhMainWndHandle, 0);
+    PhMwpInitializeMetrics(PhMainWndHandle, PhGetWindowDpi(PhMainWndHandle));
 
     // Initialize window controls.
     PhMwpInitializeControls(PhMainWndHandle);
@@ -153,59 +167,68 @@ BOOLEAN PhMainWndInitialization(
     return TRUE;
 }
 
+/**
+ * Window procedure for the main window.
+ *
+ * \param WindowHandle Handle to the window.
+ * \param uMsg Message identifier.
+ * \param wParam First message parameter.
+ * \param lParam Second message parameter.
+ * \return LRESULT Message result.
+ */
 LRESULT CALLBACK PhMwpWndProc(
-    _In_ HWND hWnd,
-    _In_ UINT uMsg,
+    _In_ HWND WindowHandle,
+    _In_ UINT WindowMessage,
     _In_ WPARAM wParam,
     _In_ LPARAM lParam
     )
 {
-    switch (uMsg)
+    switch (WindowMessage)
     {
     case WM_DESTROY:
         {
-            PhMwpOnDestroy(hWnd);
+            PhMwpOnDestroy(WindowHandle);
         }
         break;
     case WM_ENDSESSION:
         {
-            PhMwpOnEndSession(hWnd, !!wParam, (ULONG)lParam);
+            PhMwpOnEndSession(WindowHandle, !!wParam, (ULONG)lParam);
         }
         break;
     case WM_SETTINGCHANGE:
         {
-            PhMwpOnSettingChange(hWnd, (ULONG)wParam, (PWSTR)lParam);
+            PhMwpOnSettingChange(WindowHandle, (ULONG)wParam, (PWSTR)lParam);
         }
         break;
     case WM_COMMAND:
         {
-            PhMwpOnCommand(hWnd, GET_WM_COMMAND_ID(wParam, lParam));
+            PhMwpOnCommand(WindowHandle, GET_WM_COMMAND_ID(wParam, lParam));
         }
         break;
     case WM_SHOWWINDOW:
         {
-            PhMwpOnShowWindow(hWnd, !!wParam, (ULONG)lParam);
+            PhMwpOnShowWindow(WindowHandle, !!wParam, (ULONG)lParam);
         }
         break;
     case WM_SYSCOMMAND:
         {
-            if (PhMwpOnSysCommand(hWnd, (ULONG)wParam, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)))
+            if (PhMwpOnSysCommand(WindowHandle, (ULONG)wParam, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)))
                 return 0;
         }
         break;
     case WM_MENUCOMMAND:
         {
-            PhMwpOnMenuCommand(hWnd, (ULONG)wParam, (HMENU)lParam);
+            PhMwpOnMenuCommand(WindowHandle, (ULONG)wParam, (HMENU)lParam);
         }
         break;
     case WM_INITMENUPOPUP:
         {
-            PhMwpOnInitMenuPopup(hWnd, (HMENU)wParam, LOWORD(lParam), !!HIWORD(lParam));
+            PhMwpOnInitMenuPopup(WindowHandle, (HMENU)wParam, LOWORD(lParam), !!HIWORD(lParam));
         }
         break;
     case WM_SIZE:
         {
-            PhMwpOnSize(hWnd, (UINT)wParam, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            PhMwpOnSize(WindowHandle, (UINT)wParam, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
         }
         break;
     case WM_SIZING:
@@ -215,7 +238,12 @@ LRESULT CALLBACK PhMwpWndProc(
         break;
     case WM_SETFOCUS:
         {
-            PhMwpOnSetFocus(hWnd);
+            PhMwpOnSetFocus(WindowHandle);
+        }
+        break;
+    case WM_TIMER:
+        {
+            PhMwpOnTimer(WindowHandle, wParam, lParam);
         }
         break;
     case WM_NOTIFY:
@@ -228,12 +256,12 @@ LRESULT CALLBACK PhMwpWndProc(
         break;
     case WM_DEVICECHANGE:
         {
-            PhMwpOnDeviceChanged(hWnd, wParam, lParam);
+            PhMwpOnDeviceChanged(WindowHandle, wParam, lParam);
         }
         break;
     case WM_DPICHANGED:
         {
-            PhMwpOnDpiChanged(hWnd, LOWORD(wParam));
+            PhMwpOnDpiChanged(WindowHandle, LOWORD(wParam));
         }
         break;
     case WM_NCPAINT:
@@ -241,22 +269,27 @@ LRESULT CALLBACK PhMwpWndProc(
         {
             if (WindowsVersion >= WINDOWS_10 && !PhEnableThemeSupport)
             {
-                LRESULT result = DefWindowProc(hWnd, uMsg, wParam, lParam);
-                PhWindowThemeMainMenuBorder(hWnd);
+                LRESULT result = DefWindowProc(WindowHandle, WindowMessage, wParam, lParam);
+                PhWindowThemeMainMenuBorder(WindowHandle);
                 return result;
             }
         }
         break;
     }
 
-    if (uMsg >= WM_PH_FIRST && uMsg <= WM_PH_LAST)
+    if (WindowMessage >= WM_PH_FIRST && WindowMessage <= WM_PH_LAST)
     {
-        return PhMwpOnUserMessage(hWnd, uMsg, wParam, lParam);
+        return PhMwpOnUserMessage(WindowHandle, WindowMessage, wParam, lParam);
     }
 
-    return DefWindowProc(hWnd, uMsg, wParam, lParam);
+    return DefWindowProc(WindowHandle, WindowMessage, wParam, lParam);
 }
 
+/**
+ * Registers the main window class for the main window.
+ *
+ * \return The atom for the registered window class, or INVALID_ATOM on failure.
+ */
 RTL_ATOM PhMwpInitializeWindowClass(
     VOID
     )
@@ -274,15 +307,20 @@ RTL_ATOM PhMwpInitializeWindowClass(
 
     if (PhEnableWindowText)
     {
-        wcex.hIcon = PhGetApplicationIcon(FALSE);
-        wcex.hIconSm = PhGetApplicationIcon(TRUE);
+        wcex.hIcon = PhGetApplicationIcon(FALSE, USER_DEFAULT_SCREEN_DPI);
+        wcex.hIconSm = PhGetApplicationIcon(TRUE, USER_DEFAULT_SCREEN_DPI);
     }
 
     return RegisterClassEx(&wcex);
 }
 
+/**
+ * Builds the main window title based on application name, user, privilege level, and elevation.
+ *
+ * \return A string containing the window title, or NULL if window text is disabled.
+ */
 PPH_STRING PhMwpInitializeWindowTitle(
-    _In_ ULONG KphLevel
+    VOID
     )
 {
     PH_STRING_BUILDER stringBuilder;
@@ -305,7 +343,7 @@ PPH_STRING PhMwpInitializeWindowTitle(
         PhDereferenceObject(currentUserName);
     }
 
-    switch (KphLevel)
+    switch (PhMainWndKph.Level)
     {
     case KphLevelMax:
         PhAppendStringBuilder2(&stringBuilder, L"++");
@@ -324,12 +362,18 @@ PPH_STRING PhMwpInitializeWindowTitle(
         break;
     }
 
+    if (PhMainWndKph.Level && !PhMainWndKph.DynDataActive)
+        PhAppendStringBuilder2(&stringBuilder, L" (RF)"); // RF = Reduced Functionality
+
     if (PhGetOwnTokenAttributes().ElevationType == TokenElevationTypeFull)
         PhAppendStringBuilder2(&stringBuilder, L" (Administrator)");
 
     return PhFinalStringBuilderString(&stringBuilder);
 }
 
+/**
+ * Initializes provider threads for processes, services, and network.
+ */
 VOID PhMwpInitializeProviders(
     VOID
     )
@@ -345,6 +389,13 @@ VOID PhMwpInitializeProviders(
     PhInitializeProviderThread(&PhSecondaryProviderThread, PhCsUpdateInterval);
     PhInitializeProviderThread(&PhTertiaryProviderThread, PhCsUpdateInterval);
 
+    if (PhGetIntegerSetting(SETTING_ENABLE_HIGH_RESOLUTION))
+    {
+        PhSetHighResolutionProvider(&PhPrimaryProviderThread, TRUE);
+        PhSetHighResolutionProvider(&PhSecondaryProviderThread, TRUE);
+        PhSetHighResolutionProvider(&PhTertiaryProviderThread, TRUE);
+    }
+
     PhRegisterProvider(&PhPrimaryProviderThread, PhProcessProviderUpdate, NULL, &PhMwpProcessProviderRegistration);
     PhRegisterProvider(&PhSecondaryProviderThread, PhServiceProviderUpdate, NULL, &PhMwpServiceProviderRegistration);
     PhRegisterProvider(&PhSecondaryProviderThread, PhNetworkProviderUpdate, NULL, &PhMwpNetworkProviderRegistration);
@@ -357,6 +408,11 @@ VOID PhMwpInitializeProviders(
     PhStartProviderThread(&PhTertiaryProviderThread);
 }
 
+/**
+ * Shows the main window, Handles startup parameters, tab selection, system info dialog, and window state.
+ *
+ * \param ShowCommand The show command (e.g., SW_SHOW, SW_HIDE, SW_MAXIMIZE).
+ */
 VOID PhMwpShowWindow(
     _In_ LONG ShowCommand
     )
@@ -410,8 +466,11 @@ VOID PhMwpShowWindow(
     {
         ShowWindow(PhMainWndHandle, ShowCommand);
         UpdateWindow(PhMainWndHandle);
-        PhBringWindowToTop(PhMainWndHandle);
-        SetForegroundWindow(PhMainWndHandle);
+
+        if (!SetForegroundWindow(PhMainWndHandle))
+        {
+            PhBringWindowToTop(PhMainWndHandle);
+        }
     }
 
     if (PhGetIntegerSetting(SETTING_MINI_INFO_WINDOW_PINNED))
@@ -420,6 +479,11 @@ VOID PhMwpShowWindow(
     }
 }
 
+/**
+ * Applies the update interval to all provider threads.
+ *
+ * \param Interval The update interval in milliseconds.
+ */
 VOID PhMwpApplyUpdateInterval(
     _In_ ULONG Interval
     )
@@ -429,17 +493,31 @@ VOID PhMwpApplyUpdateInterval(
     PhSetIntervalProviderThread(&PhTertiaryProviderThread, Interval);
 }
 
+/**
+ * Initializes window metrics such as DPI and border size.
+ *
+ * \param WindowHandle Handle to the window.
+ * \param WindowDpi The DPI value for the window.
+ */
 VOID PhMwpInitializeMetrics(
     _In_ HWND WindowHandle,
     _In_ LONG WindowDpi
     )
 {
-    LayoutWindowDpi = PhGetWindowDpi(WindowHandle);
+    if (WindowDpi == 0)
+        WindowDpi = PhGetWindowDpi(WindowHandle);
+
+    LayoutWindowDpi = WindowDpi;
     LayoutBorderSize = PhGetSystemMetrics(SM_CXBORDER, LayoutWindowDpi);
 
     PhProcessImageListInitialization(WindowHandle, LayoutWindowDpi);
 }
 
+/**
+ * Initializes controls for the main window, including tab and tree views.
+ *
+ * \param WindowHandle Handle to the window.
+ */
 VOID PhMwpInitializeControls(
     _In_ HWND WindowHandle
     )
@@ -484,7 +562,7 @@ VOID PhMwpInitializeControls(
         );
 
     PhMwpProcessTreeNewHandle = PhCreateWindow(
-        PH_TREENEW_CLASSNAME,
+        MAKEINTATOM(PhTreeWindowAtom),
         NULL,
         WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | TN_STYLE_ICONS | TN_STYLE_DOUBLE_BUFFERED | TN_STYLE_ANIMATE_DIVIDER |
         thinRows | treelistBorder | treelistCustomColors | treelistCustomHeaderDraw | treelistCustomDragReorder,
@@ -499,7 +577,7 @@ VOID PhMwpInitializeControls(
         );
 
     PhMwpServiceTreeNewHandle = PhCreateWindow(
-        PH_TREENEW_CLASSNAME,
+        MAKEINTATOM(PhTreeWindowAtom),
         NULL,
         WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | TN_STYLE_ICONS | TN_STYLE_DOUBLE_BUFFERED | thinRows | treelistBorder | treelistCustomColors,
         0,
@@ -513,7 +591,7 @@ VOID PhMwpInitializeControls(
         );
 
     PhMwpNetworkTreeNewHandle = PhCreateWindow(
-        PH_TREENEW_CLASSNAME,
+        MAKEINTATOM(PhTreeWindowAtom),
         NULL,
         WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | TN_STYLE_ICONS | TN_STYLE_DOUBLE_BUFFERED | thinRows | treelistBorder | treelistCustomColors,
         0,
@@ -543,11 +621,34 @@ VOID PhMwpInitializeControls(
     CurrentPage = PageList->Items[0];
 }
 
+/**
+ * Worker routine for delayed stage 1 initialization.
+ *
+ * Performs additional initialization tasks after the main window is shown.
+ *
+ * \param Parameter The window handle.
+ * \return NTSTATUS Successful or errant status.
+ */
 _Function_class_(USER_THREAD_START_ROUTINE)
 NTSTATUS PhMwpLoadStage1Worker(
     _In_ PVOID Parameter
     )
 {
+    // Initialize window title (dmex)
+    {
+        PPH_STRING windowTitle;
+
+        PhMainWndKph.Level = KphLevelEx(FALSE);
+        if (!NT_SUCCESS(KphIsDynDataActive(&PhMainWndKph.DynDataActive)))
+            PhMainWndKph.DynDataActive = FALSE;
+
+        if (windowTitle = PhMwpInitializeWindowTitle())
+        {
+            PhSetWindowText((HWND)Parameter, PhGetString(windowTitle));
+            PhDereferenceObject(windowTitle);
+        }
+    }
+
     // If the update interval is too large, the user might have to wait a while before seeing some types of
     // process-related data. We force an update by boosting the provider shortly after the program
     // starts up to make things appear more quickly.
@@ -582,25 +683,17 @@ NTSTATUS PhMwpLoadStage1Worker(
     // only the device notifications. (jxy-s).
     PhMwpInitializeDeviceNotifications();
 
-    // Initialize window title (dmex)
-    {
-        PPH_STRING windowTitle;
-
-        PhMainWndLevel = KphLevelEx(FALSE);
-
-        if (windowTitle = PhMwpInitializeWindowTitle(PhMainWndLevel))
-        {
-            PhSetWindowText((HWND)Parameter, PhGetString(windowTitle));
-            PhDereferenceObject(windowTitle);
-        }
-    }
-
     DelayedLoadCompleted = TRUE;
     //PostMessage((HWND)Parameter, WM_PH_DELAYED_LOAD_COMPLETED, 0, 0);
 
     return STATUS_SUCCESS;
 }
 
+/**
+ * Handles cleanup and shutdown when the main window is destroyed.
+ *
+ * \param WindowHandle Handle to the main window being destroyed.
+ */
 VOID PhMwpOnDestroy(
     _In_ HWND WindowHandle
     )
@@ -623,6 +716,17 @@ VOID PhMwpOnDestroy(
     PostQuitMessage(0);
 }
 
+/**
+ * Handles the end session event for the main window.
+ *
+ * This function is called when the system is ending the current session,
+ * such as during shutdown or user logoff. It allows the application to
+ * perform any necessary cleanup or state saving before the session ends.
+ *
+ * \param WindowHandle Handle to the window receiving the end session event.
+ * \param SessionEnding TRUE if the session is ending, FALSE otherwise.
+ * \param Reason Reason code for the session end (e.g., shutdown, logoff).
+ */
 VOID PhMwpOnEndSession(
     _In_ HWND WindowHandle,
     _In_ BOOLEAN SessionEnding,
@@ -647,6 +751,13 @@ VOID PhMwpOnEndSession(
     PhExitApplication(STATUS_SUCCESS);
 }
 
+/**
+ * Handles changes to system or application settings.
+ *
+ * \param WindowHandle Handle to the window receiving the setting change notification.
+ * \param Action Optional action code specifying the type of setting change.
+ * \param Metric Optional string specifying the particular metric or setting that changed.
+ */
 VOID PhMwpOnSettingChange(
     _In_ HWND WindowHandle,
     _In_opt_ ULONG Action,
@@ -655,14 +766,14 @@ VOID PhMwpOnSettingChange(
 {
     {
         HFONT oldFont = PhApplicationFont;
-        PhApplicationFont = PhInitializeFont(LayoutWindowDpi);
+        PhApplicationFont = PhCreateApplicationFont(LayoutWindowDpi);
         if (oldFont) DeleteFont(oldFont);
     }
 
     if (PhGetIntegerSetting(SETTING_ENABLE_MONOSPACE_FONT))
     {
         HFONT oldFont = PhMonospaceFont;
-        PhMonospaceFont = PhInitializeMonospaceFont(LayoutWindowDpi);
+        PhMonospaceFont = PhCreateMonospaceFont(LayoutWindowDpi);
         if (oldFont) DeleteFont(oldFont);
     }
 
@@ -682,6 +793,14 @@ VOID PhMwpOnSettingChange(
     //}
 }
 
+/**
+ * Opens a handle to the Service Control Manager (SCM) on the local computer.
+ *
+ * \param Handle Pointer to a variable that receives the SCM handle.
+ * \param DesiredAccess Access mask specifying the desired access rights to the SCM.
+ * \param Context Optional context parameter (can be NULL).
+ * \return NTSTATUS Successful or errant status.
+ */
 _Function_class_(PH_OPEN_OBJECT)
 static NTSTATUS PhpOpenServiceControlManager(
     _Inout_ PHANDLE Handle,
@@ -700,6 +819,14 @@ static NTSTATUS PhpOpenServiceControlManager(
     return PhGetLastWin32ErrorAsNtStatus();
 }
 
+/**
+ * Closes a handle to the Service Control Manager.
+ *
+ * \param Handle Optional handle to the Service Control Manager to be closed.
+ * \param Release Indicates whether to release associated resources.
+ * \param Context Optional context pointer for additional information.
+ * \return NTSTATUS Successful or errant status.
+ */
 _Function_class_(PH_CLOSE_OBJECT)
 static NTSTATUS PhpCloseServiceControlManager(
     _In_opt_ HANDLE Handle,
@@ -712,6 +839,14 @@ static NTSTATUS PhpCloseServiceControlManager(
     return STATUS_SUCCESS;
 }
 
+/**
+ * Opens a dummy security handle used for permission editing operations.
+ *
+ * \param Handle Receives the dummy handle value (implementation-defined).
+ * \param DesiredAccess Requested access mask (unused for dummy handle).
+ * \param Context Optional context pointer (unused).
+ * \return NTSTATUS status code indicating success or failure.
+ */
 _Function_class_(PH_OPEN_OBJECT)
 static NTSTATUS PhpOpenSecurityDummyHandle(
     _Inout_ PHANDLE Handle,
@@ -722,6 +857,16 @@ static NTSTATUS PhpOpenSecurityDummyHandle(
     return STATUS_SUCCESS;
 }
 
+/**
+ * Returns a dummy handle representing COM Access Permissions.
+ *
+ * This helper is used when displaying or editing COM permissions where a real
+ * handle is not required.
+ *\param Handle Receives a value representing access permissions (SD_ACCESSPERMISSIONS).
+ *\param DesiredAccess Requested access mask (unused).
+ *\param Context Optional context pointer (unused).
+ *\return NTSTATUS success code.
+ */
 _Function_class_(PH_OPEN_OBJECT)
 static NTSTATUS PhpOpenComDummyAccessPermissionsHandle(
     _Inout_ PHANDLE Handle,
@@ -733,6 +878,15 @@ static NTSTATUS PhpOpenComDummyAccessPermissionsHandle(
     return STATUS_SUCCESS;
 }
 
+/**
+ * Returns a dummy handle representing COM Access Restrictions.
+ *
+ * Used when displaying or editing COM access restriction ACLs.
+ *\param Handle Receives a value representing access restrictions (SD_ACCESSRESTRICTIONS).
+ *\param DesiredAccess Requested access mask (unused).
+ *\param Context Optional context pointer (unused).
+ *\return NTSTATUS success code.
+ */
 _Function_class_(PH_OPEN_OBJECT)
 static NTSTATUS PhpOpenComDummyAccessRestrictionsHandle(
     _Inout_ PHANDLE Handle,
@@ -744,6 +898,16 @@ static NTSTATUS PhpOpenComDummyAccessRestrictionsHandle(
     return STATUS_SUCCESS;
 }
 
+/**
+ * Returns a dummy handle representing COM Launch Permissions.
+ *
+ * This is a convenience helper used when editing COM launch permissions in
+ * UI dialogs where a real object handle is not necessary.
+ *\param Handle Receives a value representing launch permissions (SD_LAUNCHPERMISSIONS).
+ *\param DesiredAccess Requested access mask (unused).
+ *\param Context Optional context pointer (unused).
+ *\return NTSTATUS success code.
+ */
 _Function_class_(PH_OPEN_OBJECT)
 static NTSTATUS PhpOpenComDummyLaunchPermissionsHandle(
     _Inout_ PHANDLE Handle,
@@ -755,6 +919,16 @@ static NTSTATUS PhpOpenComDummyLaunchPermissionsHandle(
     return STATUS_SUCCESS;
 }
 
+/**
+ * Returns a dummy handle representing COM Launch Restrictions.
+ *
+ * Used by the UI when presenting COM launch restriction settings without
+ * requiring an actual system handle.
+ *\param Handle Receives a value representing launch restrictions (SD_LAUNCHRESTRICTIONS).
+ *\param DesiredAccess Requested access mask (unused).
+ *\param Context Optional context pointer (unused).
+ *\return NTSTATUS success code.
+ */
 _Function_class_(PH_OPEN_OBJECT)
 static NTSTATUS PhpOpenComDummyLaunchRestrictionsHandle(
     _Inout_ PHANDLE Handle,
@@ -766,6 +940,14 @@ static NTSTATUS PhpOpenComDummyLaunchRestrictionsHandle(
     return STATUS_SUCCESS;
 }
 
+/**
+ * Opens the current window desktop ("Default") and returns a handle.
+ *
+ * \param Handle Receives the desktop handle on success.
+ * \param DesiredAccess Requested access mask for the desktop.
+ * \param Context Optional context pointer (unused).
+ * \return NTSTATUS success or error code.
+ */
 _Function_class_(PH_OPEN_OBJECT)
 static NTSTATUS PhpOpenSecurityDesktopHandle(
     _Inout_ PHANDLE Handle,
@@ -789,6 +971,14 @@ static NTSTATUS PhpOpenSecurityDesktopHandle(
     return STATUS_UNSUCCESSFUL;
 }
 
+/**
+ * Closes a desktop handle previously opened by PhpOpenSecurityDesktopHandle.
+ *
+ * \param Handle The desktop handle to close (may be NULL).
+ * \param Release Reserved; indicates whether associated resources should be released.
+ * \param Context Optional context pointer (unused).
+ * \return NTSTATUS success code.
+ */
 _Function_class_(PH_CLOSE_OBJECT)
 static NTSTATUS PhpCloseSecurityDesktopHandle(
     _In_opt_ HANDLE Handle,
@@ -801,6 +991,14 @@ static NTSTATUS PhpCloseSecurityDesktopHandle(
     return STATUS_SUCCESS;
 }
 
+/**
+ * Opens the interactive window station and returns a handle.
+ *
+ * \param Handle Receives the window station handle on success.
+ * \param DesiredAccess Requested access mask for the window station.
+ * \param Context Optional context pointer (unused).
+ * \return NTSTATUS success or error code.
+ */
 _Function_class_(PH_OPEN_OBJECT)
 static NTSTATUS PhpOpenSecurityStationHandle(
     _Inout_ PHANDLE Handle,
@@ -823,6 +1021,14 @@ static NTSTATUS PhpOpenSecurityStationHandle(
     return STATUS_UNSUCCESSFUL;
 }
 
+/**
+ * Closes a window station handle previously opened by PhpOpenSecurityStationHandle.
+ *
+ * \param Handle The window station handle to close (may be NULL).
+ * \param Release Reserved; indicates whether associated resources should be released.
+ * \param Context Optional context pointer (unused).
+ * \return NTSTATUS success code.
+ */
 _Function_class_(PH_CLOSE_OBJECT)
 static NTSTATUS PhpCloseSecurityStationHandle(
     _In_opt_ HANDLE Handle,
@@ -835,6 +1041,13 @@ static NTSTATUS PhpCloseSecurityStationHandle(
     return STATUS_SUCCESS;
 }
 
+/**
+ * Handles the dump command for a process in the main window.
+ *
+ * \param WindowHandle Handle to the window receiving the command.
+ * \param Id Identifier of the command.
+ * \param ProcessItem Pointer to the process item to be dumped.
+ */
 static VOID PhpMwpOnDumpCommand(
     _In_ HWND WindowHandle,
     _In_ ULONG Id,
@@ -933,6 +1146,12 @@ static VOID PhpMwpOnDumpCommand(
     }
 }
 
+/**
+ * Handles command messages for the main window.
+ *
+ * \param WindowHandle Handle to the main window receiving the command.
+ * \param Id Identifier of the command to process.
+ */
 VOID PhMwpOnCommand(
     _In_ HWND WindowHandle,
     _In_ ULONG Id
@@ -1318,6 +1537,11 @@ VOID PhMwpOnCommand(
             PhShowLiveDumpDialog(WindowHandle);
         }
         break;
+    case ID_TOOLS_INFORMER:
+        {
+            PhShowInformerWindow(WindowHandle);
+        }
+        break;
     case ID_TOOLS_STARTTASKMANAGER:
         {
             extern BOOLEAN PhpIsDefaultTaskManager(VOID); // options.c (dmex)
@@ -1389,6 +1613,42 @@ VOID PhMwpOnCommand(
                 else
                 {
                     PhCreateProcessIgnoreIfeoDebugger(PhGetString(perfmonFileName), L" /res");
+                }
+            }
+        }
+        break;
+    case ID_TOOLS_STARTPERFORMANCEMONITOR:
+        {
+            PPH_STRING perfmonFileName;
+
+            perfmonFileName = PH_AUTO(PhGetSystemDirectoryWin32Z(L"\\perfmon.exe"));
+
+            if (PhGetIntegerSetting(SETTING_ENABLE_SHELL_EXECUTE_SKIP_IFEO_DEBUGGER))
+            {
+                PhShellExecuteEx(
+                    WindowHandle,
+                    PhGetString(perfmonFileName),
+                    L" /sys",
+                    NULL,
+                    SW_SHOW,
+                    0,
+                    0,
+                    NULL
+                    );
+            }
+            else
+            {
+                if (!PhGetOwnTokenAttributes().Elevated)
+                {
+                    if (PhUiConnectToPhSvc(WindowHandle, FALSE))
+                    {
+                        PhSvcCallCreateProcessIgnoreIfeoDebugger(PhGetString(perfmonFileName), L" /sys");
+                        PhUiDisconnectFromPhSvc();
+                    }
+                }
+                else
+                {
+                    PhCreateProcessIgnoreIfeoDebugger(PhGetString(perfmonFileName), L" /sys");
                 }
             }
         }
@@ -1928,7 +2188,7 @@ VOID PhMwpOnCommand(
                 //
                 //if (!PhIsNullOrEmptyString(fileNameWin32))
                 //{
-                //    PhSetStringSetting2(L"RunAsProgram", &fileNameWin32->sr);
+                //    PhSetStringSetting2(SETTING_RUN_AS_PROGRAM, &fileNameWin32->sr);
                 //    PhDereferenceObject(fileNameWin32);
                 //
                 //    PhShowRunAsDialog(WindowHandle, NULL);
@@ -2420,6 +2680,13 @@ VOID PhMwpOnCommand(
     }
 }
 
+/**
+ * Handles the ShowWindow event for the main window.
+ *
+ * \param WindowHandle Handle to the window receiving the event.
+ * \param Showing Indicates whether the window is being shown (TRUE) or hidden (FALSE).
+ * \param State Specifies the state of the window (e.g., minimized, maximized, normal).
+ */
 VOID PhMwpOnShowWindow(
     _In_ HWND WindowHandle,
     _In_ BOOLEAN Showing,
@@ -2433,6 +2700,15 @@ VOID PhMwpOnShowWindow(
     }
 }
 
+/**
+ * Handles system command messages for the main window.
+ *
+ * \param WindowHandle Handle to the window receiving the system command.
+ * \param Type The type of system command (e.g., SC_CLOSE, SC_MINIMIZE).
+ * \param CursorScreenX The X coordinate of the cursor in screen coordinates.
+ * \param CursorScreenY The Y coordinate of the cursor in screen coordinates.
+ * \return TRUE if the system command was handled; otherwise, FALSE.
+ */
 BOOLEAN PhMwpOnSysCommand(
     _In_ HWND WindowHandle,
     _In_ ULONG Type,
@@ -2468,6 +2744,13 @@ BOOLEAN PhMwpOnSysCommand(
     return FALSE;
 }
 
+/**
+ * Handles menu command events for the main window.
+ *
+ * \param WindowHandle Handle to the window receiving the menu command.
+ * \param Index The index of the selected menu item.
+ * \param Menu Handle to the menu from which the command originated.
+ */
 VOID PhMwpOnMenuCommand(
     _In_ HWND WindowHandle,
     _In_ ULONG Index,
@@ -2484,14 +2767,23 @@ VOID PhMwpOnMenuCommand(
     {
         PhMwpDispatchMenuCommand(
             WindowHandle,
-            Menu,
-            Index,
             menuItemInfo.wID,
             menuItemInfo.dwItemData
             );
     }
 }
 
+/**
+ * Handles the initialization of a menu popup.
+ *
+ * This function is called when a menu popup is about to be displayed. It allows for
+ * customization of the menu items based on the current state of the application.
+ *
+ * \param WindowHandle Handle to the window associated with the menu.
+ * \param Menu Handle to the menu being initialized.
+ * \param Index The zero-based index of the menu in the menu bar.
+ * \param IsWindowMenu TRUE if the menu is a window menu; otherwise, FALSE.
+ */
 VOID PhMwpOnInitMenuPopup(
     _In_ HWND WindowHandle,
     _In_ HMENU Menu,
@@ -2543,6 +2835,17 @@ VOID PhMwpOnInitMenuPopup(
     SubMenuObjects[Index] = menu;
 }
 
+/**
+ * Handles the WM_SIZE message for the main window.
+ *
+ * This function is called when the main window is resized. It processes the new size and state,
+ * allowing the application to adjust its layout or controls accordingly.
+ *
+ * \param WindowHandle Handle to the window receiving the resize event.
+ * \param State Specifies the type of resizing (e.g., SIZE_MINIMIZED, SIZE_MAXIMIZED, SIZE_RESTORED).
+ * \param Width The new width of the client area, in pixels.
+ * \param Height The new height of the client area, in pixels.
+ */
 VOID PhMwpOnSize(
     _In_ HWND WindowHandle,
     _In_ UINT State,
@@ -2563,6 +2866,12 @@ VOID PhMwpOnSize(
     }
 }
 
+/**
+ * Handles the window sizing event.
+ *
+ * \param Edge The edge of the window being resized (e.g., left, right, top, bottom).
+ * \param DragRectangle Pointer to a RECT structure that specifies the new size and position.
+ */
 VOID PhMwpOnSizing(
     _In_ ULONG Edge,
     _In_ PRECT DragRectangle
@@ -2571,6 +2880,11 @@ VOID PhMwpOnSizing(
     PhResizingMinimumSize(DragRectangle, Edge, 400, 175);
 }
 
+/**
+ * Handles the WM_SETFOCUS message for the main window.
+ *
+ * \param WindowHandle Handle to the window that received focus.
+ */
 VOID PhMwpOnSetFocus(
     _In_ HWND WindowHandle
     )
@@ -2585,14 +2899,20 @@ VOID PhMwpOnSetFocus(
     // Update the window status.
 
     {
-        KPH_LEVEL status;
+        PH_MWP_KPH kph;
         PPH_STRING windowTitle;
 
-        if (DelayedLoadCompleted && PhMainWndLevel != (status = KphLevelEx(FALSE)))
-        {
-            PhMainWndLevel = status;
+        kph.Level = KphLevelEx(FALSE);
+        if (!NT_SUCCESS(KphIsDynDataActive(&kph.DynDataActive)))
+            kph.DynDataActive = FALSE;
 
-            if (windowTitle = PhMwpInitializeWindowTitle(PhMainWndLevel))
+        if (DelayedLoadCompleted &&
+            (PhMainWndKph.Level != kph.Level ||
+             PhMainWndKph.DynDataActive != kph.DynDataActive))
+        {
+            PhMainWndKph = kph;
+
+            if (windowTitle = PhMwpInitializeWindowTitle())
             {
                 PhSetWindowText(WindowHandle, PhGetString(windowTitle));
                 PhDereferenceObject(windowTitle);
@@ -2601,6 +2921,30 @@ VOID PhMwpOnSetFocus(
     }
 }
 
+/**
+ * Handles timer events for the main window.
+ *
+ * \param WindowHandle Handle to the window receiving the timer event.
+ * \param wParam The timer identifier.
+ * \param lParam Additional message information (unused).
+ */
+VOID PhMwpOnTimer(
+    _In_ HWND WindowHandle,
+    _In_ WPARAM wParam,
+    _In_ LPARAM lParam
+    )
+{
+    LONG timerId = (LONG)(ULONG_PTR)wParam;
+    TIMERPROC timerProc = (TIMERPROC)lParam;
+}
+
+/**
+ * Handles notification messages for the main window.
+ *
+ * \param Header Pointer to an NMHDR structure containing notification information.
+ * \param Result Pointer to a variable that receives the result of the notification processing.
+ * \return Returns TRUE if the notification was handled successfully, otherwise FALSE.
+ */
 _Success_(return)
 BOOLEAN PhMwpOnNotify(
     _In_ NMHDR *Header,
@@ -2615,6 +2959,17 @@ BOOLEAN PhMwpOnNotify(
     return FALSE;
 }
 
+/**
+ * Handles device change notifications for the main window.
+ *
+ * This function is called when the system detects a change in the device configuration,
+ * such as when a device is added or removed. It processes the WM_DEVICECHANGE message
+ * and performs any necessary updates or actions in response to the change.
+ *
+ * \param WindowHandle Handle to the window receiving the device change notification.
+ * \param wParam Additional message information. Specifies the event that occurred.
+ * \param lParam Additional message information. Pointer to a structure with event-specific data.
+ */
 VOID PhMwpOnDeviceChanged(
     _In_ HWND WindowHandle,
     _In_ WPARAM wParam,
@@ -2650,17 +3005,23 @@ VOID PhMwpOnDeviceChanged(
     }
 }
 
+/**
+ * Handles the DPI change event for the specified window.
+ *
+ * \param WindowHandle Handle to the window whose DPI has changed.
+ * \param WindowDpi The new DPI value for the window.
+ */
 VOID PhMwpOnDpiChanged(
     _In_ HWND WindowHandle,
     _In_ LONG WindowDpi
     )
 {
-    PhGuiSupportUpdateSystemMetrics(WindowHandle, WindowDpi);
-
     PhMwpInitializeMetrics(WindowHandle, WindowDpi);
 
     if (PhEnableWindowText)
+    {
         PhSetApplicationWindowIconEx(WindowHandle, LayoutWindowDpi);
+    }
 
     PhMwpOnSettingChange(WindowHandle, 0, NULL);
 
@@ -2685,6 +3046,15 @@ VOID PhMwpOnDpiChanged(
     InvalidateRect(WindowHandle, NULL, TRUE);
 }
 
+/**
+ * Handles custom user messages sent to the main window.
+ *
+ * \param WindowHandle Handle to the window receiving the message.
+ * \param Message The user-defined message identifier.
+ * \param WParam Additional message-specific information.
+ * \param LParam Additional message-specific information.
+ * \return The result of message processing (LRESULT).
+ */
 LRESULT PhMwpOnUserMessage(
     _In_ HWND WindowHandle,
     _In_ ULONG Message,
@@ -2772,9 +3142,6 @@ LRESULT PhMwpOnUserMessage(
             case 4:
                 PhMwpInvokeSelectNetworkItem((PVOID)LParam);
                 break;
-            case 5:
-                PhMwpInvokeUpdateWindowFont((PVOID)LParam);
-                break;
             }
         }
         break;
@@ -2814,10 +3181,13 @@ LRESULT PhMwpOnUserMessage(
         break;
     case WM_PH_INVOKE:
         {
-            VOID (NTAPI *function)(PVOID);
-
-            function = (PVOID)LParam;
-            function((PVOID)WParam);
+            PhProcessInvokeQueue();
+            InterlockedExchange(&PhMainThreadInvokePending, 0);
+        }
+        break;
+    case WM_PH_UPDATE_FONT:
+        {
+            PhMwpInvokeUpdateWindowFont((PVOID)LParam);
         }
         break;
     }
@@ -2825,6 +3195,11 @@ LRESULT PhMwpOnUserMessage(
     return 0;
 }
 
+/**
+ * Loads the main window settings for the application.
+ *
+ * \param WindowHandle Handle to the main window for which settings are to be loaded.
+ */
 VOID PhMwpLoadSettings(
     _In_ HWND WindowHandle
     )
@@ -2871,28 +3246,37 @@ VOID PhMwpLoadSettings(
     PhLogInitialization();
 }
 
+/**
+ * Saves the current settings of the main window.
+ *
+ * \param WindowHandle Handle to the main window whose settings are to be saved.
+ */
 VOID PhMwpSaveSettings(
     _In_ HWND WindowHandle
     )
 {
+    NTSTATUS status;
+
     PhMwpNotifyAllPages(MainTabPageSaveSettings, NULL, NULL);
 
     PhSaveWindowPlacementToSetting(SETTING_MAIN_WINDOW_POSITION, SETTING_MAIN_WINDOW_SIZE, WindowHandle);
     PhMwpSaveWindowState(WindowHandle);
 
-    if (!PhIsNullOrEmptyString(PhSettingsFileName))
-    {
-        NTSTATUS status;
-
+    if (PhIsNullOrEmptyString(PhSettingsFileName))
+        status = PhSaveSettings(NULL);
+    else
         status = PhSaveSettings(&PhSettingsFileName->sr);
 
-        if (!NT_SUCCESS(status))
-        {
-            PhShowStatus(NULL, L"Unable to save application settings.", status, 0);
-        }
+    if (!NT_SUCCESS(status))
+    {
+        PhShowStatus(NULL, L"Unable to save application settings.", status, 0);
     }
 }
 
+/**
+ * Saves the current state of the main window.
+ * \param WindowHandle Handle to the window whose state is to be saved.
+ */
 VOID PhMwpSaveWindowState(
     _In_ HWND WindowHandle
     )
@@ -2907,6 +3291,14 @@ VOID PhMwpSaveWindowState(
         PhSetIntegerSetting(SETTING_MAIN_WINDOW_STATE, SW_MAXIMIZE);
 }
 
+/**
+ * Updates the layout padding for the main window.
+ *
+ * This function recalculates and applies the necessary padding values
+ * to the main window layout, ensuring proper spacing and alignment
+ * of UI elements. It should be called whenever the window layout
+ * or padding requirements change.
+ */
 VOID PhMwpUpdateLayoutPadding(
     VOID
     )
@@ -2919,6 +3311,12 @@ VOID PhMwpUpdateLayoutPadding(
     LayoutPadding = data.Padding;
 }
 
+/**
+ * Applies padding to the specified rectangle.
+ *
+ * \param Rect A pointer to a RECT structure that will be modified to include the specified padding.
+ * \param Padding A pointer to a RECT structure specifying the padding to apply (left, top, right, bottom).
+ */
 VOID PhMwpApplyLayoutPadding(
     _Inout_ PRECT Rect,
     _In_ PRECT Padding
@@ -2930,6 +3328,11 @@ VOID PhMwpApplyLayoutPadding(
     Rect->bottom -= Padding->bottom;
 }
 
+/**
+ * Adjusts the layout of the main window using a deferred window positioning handle.
+ *
+ * \param DeferHandle A pointer to an HDWP handle used for batching window position changes.
+ */
 VOID PhMwpLayout(
     _Inout_ HDWP *DeferHandle
     )
@@ -2980,6 +3383,11 @@ VOID PhMwpLayout(
     PhMwpLayoutTabControl(DeferHandle);
 }
 
+/**
+ * Sets up the computer menu for the main window.
+ *
+ * \param Root Pointer to the root menu item to be configured.
+ */
 VOID PhMwpSetupComputerMenu(
     _In_ PPH_EMENU_ITEM Root
     )
@@ -3001,6 +3409,13 @@ VOID PhMwpSetupComputerMenu(
     }
 }
 
+/**
+ * Executes a computer-related command based on the specified command ID.
+ *
+ * \param WindowHandle Handle to the window that will receive any notifications or messages.
+ * \param Id Identifier of the computer command to execute.
+ * \return TRUE if the command was executed successfully, FALSE otherwise.
+ */
 BOOLEAN PhMwpExecuteComputerCommand(
     _In_ HWND WindowHandle,
     _In_ ULONG Id
@@ -3064,6 +3479,12 @@ BOOLEAN PhMwpExecuteComputerCommand(
     return FALSE;
 }
 
+/**
+ * Determines whether the specified window is overlapped by other windows.
+ *
+ * \param WindowHandle Handle to the window to check for overlap.
+ * \return TRUE if the window is overlapped by other windows; FALSE otherwise.
+ */
 BOOLEAN PhMwpIsWindowOverlapped(
     _In_ HWND WindowHandle
     )
@@ -3094,6 +3515,12 @@ BOOLEAN PhMwpIsWindowOverlapped(
     return FALSE;
 }
 
+/**
+ * Activates the specified window.
+ *
+ * \param WindowHandle Handle to the window to be activated.
+ * \param Toggle If TRUE, toggles the activation state; if FALSE, activates the window without toggling.
+ */
 VOID PhMwpActivateWindow(
     _In_ HWND WindowHandle,
     _In_ BOOLEAN Toggle
@@ -3118,6 +3545,12 @@ VOID PhMwpActivateWindow(
     }
 }
 
+/**
+ * Creates a computer menu.
+ *
+ * \param DelayLoadMenu Specifies whether the menu should be loaded with a delay.
+ * \return A pointer to the created PPH_EMENU structure.
+ */
 PPH_EMENU PhpCreateComputerMenu(
     _In_ BOOLEAN DelayLoadMenu
     )
@@ -3162,6 +3595,13 @@ PPH_EMENU PhpCreateComputerMenu(
     return menuItem;
 }
 
+/**
+ * Creates the system menu for the application.
+ *
+ * \param HackerMenu A pointer to the base menu structure to be used for creating the system menu.
+ * \param DelayLoadMenu If TRUE, the menu will be loaded with a delay; if FALSE, it will be loaded immediately.
+ * \return A pointer to the newly created system menu (PPH_EMENU).
+ */
 PPH_EMENU PhpCreateSystemMenu(
     _In_ PPH_EMENU HackerMenu,
     _In_ BOOLEAN DelayLoadMenu
@@ -3182,6 +3622,12 @@ PPH_EMENU PhpCreateSystemMenu(
     return HackerMenu;
 }
 
+/**
+ * Creates and initializes a view menu.
+ *
+ * \param ViewMenu A pointer to an existing PPH_EMENU structure representing the view menu to be created or modified.
+ * \return A pointer to the newly created or updated PPH_EMENU structure.
+ */
 PPH_EMENU PhpCreateViewMenu(
     _In_ PPH_EMENU ViewMenu
     )
@@ -3224,6 +3670,12 @@ PPH_EMENU PhpCreateViewMenu(
     return ViewMenu;
 }
 
+/**
+ * Creates or initializes the Tools menu.
+ *
+ * \param ToolsMenu A pointer to an existing PPH_EMENU structure representing the Tools menu.
+ * \return A pointer to the created or modified PPH_EMENU structure.
+ */
 PPH_EMENU PhpCreateToolsMenu(
     _In_ PPH_EMENU ToolsMenu
     )
@@ -3236,9 +3688,13 @@ PPH_EMENU PhpCreateToolsMenu(
     PhInsertEMenuItem(ToolsMenu, PhCreateEMenuItem(0, ID_TOOLS_THREADSTACKS, L"&Search thread stacks", NULL, NULL), ULONG_MAX);
     PhInsertEMenuItem(ToolsMenu, PhCreateEMenuItem(0, ID_TOOLS_ZOMBIEPROCESSES, L"&Zombie processes", NULL, NULL), ULONG_MAX);
     PhInsertEMenuItem(ToolsMenu, PhCreateEMenuItem(0, ID_TOOLS_PAGEFILES, L"&Pagefiles", NULL, NULL), ULONG_MAX);
+    PhInsertEMenuItem(ToolsMenu, PhCreateEMenuItem(
+        (PhCsEnableProcessMonitor && KsiLevel() >= KphLevelMed) ? 0 : PH_EMENU_DISABLED,
+        ID_TOOLS_INFORMER, L"&Process monitor", NULL, NULL), ULONG_MAX);
     PhInsertEMenuItem(ToolsMenu, PhCreateEMenuSeparator(), ULONG_MAX);
     PhInsertEMenuItem(ToolsMenu, PhCreateEMenuItem(0, ID_TOOLS_STARTTASKMANAGER, L"Start &Task Manager", NULL, NULL), ULONG_MAX);
     PhInsertEMenuItem(ToolsMenu, PhCreateEMenuItem(0, ID_TOOLS_STARTRESOURCEMONITOR, L"Start &Resource Monitor", NULL, NULL), ULONG_MAX);
+    PhInsertEMenuItem(ToolsMenu, PhCreateEMenuItem(0, ID_TOOLS_STARTPERFORMANCEMONITOR, L"Start &Performance Monitor", NULL, NULL), ULONG_MAX);
     PhInsertEMenuItem(ToolsMenu, PhCreateEMenuSeparator(), ULONG_MAX);
     PhInsertEMenuItem(ToolsMenu, PhCreateEMenuItem(0, ID_TOOLS_SHUTDOWNWSLPROCESSES, L"T&erminate WSL processes", NULL, NULL), ULONG_MAX);
     PhInsertEMenuItem(ToolsMenu, PhCreateEMenuSeparator(), ULONG_MAX);
@@ -3259,6 +3715,13 @@ PPH_EMENU PhpCreateToolsMenu(
     return ToolsMenu;
 }
 
+/**
+ * Creates or initializes a users menu.
+ *
+ * \param UsersMenu Pointer to an existing PPH_EMENU structure to be used or modified.
+ * \param DelayLoadMenu If TRUE, the menu will be loaded with a delay; if FALSE, it will be loaded immediately.
+ * \return Pointer to the created or initialized PPH_EMENU structure representing the users menu.
+ */
 PPH_EMENU PhpCreateUsersMenu(
     _In_ PPH_EMENU UsersMenu,
     _In_ BOOLEAN DelayLoadMenu
@@ -3279,6 +3742,12 @@ PPH_EMENU PhpCreateUsersMenu(
     return UsersMenu;
 }
 
+/**
+ * Creates or initializes a Help menu.
+ *
+ * \param HelpMenu A pointer to a PPH_EMENU structure representing the Help menu to be created or initialized.
+ * \return A pointer to the created or initialized PPH_EMENU structure.
+ */
 PPH_EMENU PhpCreateHelpMenu(
     _In_ PPH_EMENU HelpMenu
     )
@@ -3291,6 +3760,12 @@ PPH_EMENU PhpCreateHelpMenu(
     return HelpMenu;
 }
 
+/**
+ * Creates the main menu for the application.
+ *
+ * \param SubMenuIndex The index of the submenu to be created or selected.
+ * \return A pointer to the created PPH_EMENU structure representing the main menu.
+ */
 PPH_EMENU PhpCreateMainMenu(
     _In_ ULONG SubMenuIndex
     )
@@ -3350,6 +3825,11 @@ PPH_EMENU PhpCreateMainMenu(
     return menu;
 }
 
+/**
+ * Initializes the main menu for the specified window.
+ *
+ * \param WindowHandle Handle to the window for which the main menu is to be initialized.
+ */
 VOID PhMwpInitializeMainMenu(
     _In_ HWND WindowHandle
     )
@@ -3374,10 +3854,15 @@ VOID PhMwpInitializeMainMenu(
     }
 }
 
+/**
+ * Dispatches a menu command based on the provided parameters.
+ *
+ * \param WindowHandle Handle to the window receiving the menu command.
+ * \param ItemId Identifier of the menu item.
+ * \param ItemData Additional data associated with the menu item.
+ */
 VOID PhMwpDispatchMenuCommand(
     _In_ HWND WindowHandle,
-    _In_ HMENU MenuHandle,
-    _In_ ULONG ItemIndex,
     _In_ ULONG ItemId,
     _In_ ULONG_PTR ItemData
     )
@@ -3521,6 +4006,10 @@ VOID PhMwpDispatchMenuCommand(
     SendMessage(WindowHandle, WM_COMMAND, ItemId, 0);
 }
 
+/**
+ * Creates and returns a notification menu for the system tray or notification area.
+ * \return A pointer to a PPH_EMENU structure representing the created notification menu.
+ */
 PPH_EMENU PhpCreateNotificationMenu(
     VOID
     )
@@ -3655,6 +4144,10 @@ BOOLEAN PhMwpExecuteNotificationMenuCommand(
     return FALSE;
 }
 
+/**
+ * Creates and returns a notification settings menu.
+ * \return A pointer to a PPH_EMENU structure representing the notification settings menu.
+ */
 PPH_EMENU PhpCreateNotificationSettingsMenu(
     VOID
     )
@@ -3692,6 +4185,13 @@ PPH_EMENU PhpCreateNotificationSettingsMenu(
     return menuItem;
 }
 
+/**
+ * Executes a command from the notification settings menu.
+ *
+ * \param WindowHandle Handle to the window that receives the command.
+ * \param Id Identifier of the notification menu command to execute.
+ * \return TRUE if the command was executed successfully, FALSE otherwise.
+ */
 BOOLEAN PhMwpExecuteNotificationSettingsMenuCommand(
     _In_ HWND WindowHandle,
     _In_ ULONG Id
@@ -3752,6 +4252,10 @@ BOOLEAN PhMwpExecuteNotificationSettingsMenuCommand(
     return FALSE;
 }
 
+/**
+ * Creates and returns a pointer to an icon menu.
+ * \return Pointer to the created PPH_EMENU structure representing the icon menu.
+ */
 PPH_EMENU PhpCreateIconMenu(
     VOID
     )
@@ -3771,8 +4275,15 @@ PPH_EMENU PhpCreateIconMenu(
     return menu;
 }
 
+/**
+ * Initializes a submenu in the main window.
+ *
+ * \param WindowHandle Handle to the window that owns the menu.
+ * \param Menu Pointer to the menu structure to be initialized.
+ * \param Index Index specifying which submenu to initialize.
+ */
 VOID PhMwpInitializeSubMenu(
-    _In_ HWND hwnd,
+    _In_ HWND WindowHandle,
     _In_ PPH_EMENU Menu,
     _In_ ULONG Index
     )
@@ -3800,7 +4311,7 @@ VOID PhMwpInitializeSubMenu(
             {
                 HBITMAP shieldBitmap;
 
-                if (shieldBitmap = PhGetShieldBitmap(LayoutWindowDpi, PhSmallIconSize.X, PhSmallIconSize.Y))
+                if (shieldBitmap = PhGetShieldBitmap(LayoutWindowDpi, PhGetSystemMetrics(SM_CXSMICON, LayoutWindowDpi), PhGetSystemMetrics(SM_CYSMICON, LayoutWindowDpi)))
                 {
                     if (menuItem = PhFindEMenuItem(Menu, 0, NULL, ID_HACKER_SHOWDETAILSFORALLPROCESSES))
                         menuItem->Bitmap = shieldBitmap;
@@ -3903,17 +4414,25 @@ VOID PhMwpInitializeSubMenu(
         {
             HBITMAP shieldBitmap;
 
-            if (shieldBitmap = PhGetShieldBitmap(LayoutWindowDpi, PhSmallIconSize.X, PhSmallIconSize.Y))
+            if (shieldBitmap = PhGetShieldBitmap(LayoutWindowDpi, PhGetSystemMetrics(SM_CXSMICON, LayoutWindowDpi), PhGetSystemMetrics(SM_CYSMICON, LayoutWindowDpi)))
             {
                 if (menuItem = PhFindEMenuItem(Menu, 0, NULL, ID_TOOLS_STARTTASKMANAGER))
                     menuItem->Bitmap = shieldBitmap;
                 if (menuItem = PhFindEMenuItem(Menu, 0, NULL, ID_TOOLS_STARTRESOURCEMONITOR))
+                    menuItem->Bitmap = shieldBitmap;
+                if (menuItem = PhFindEMenuItem(Menu, 0, NULL, ID_TOOLS_STARTPERFORMANCEMONITOR))
                     menuItem->Bitmap = shieldBitmap;
             }
         }
     }
 }
 
+/**
+ * Initializes section-related menu items in the specified menu.
+ *
+ * \param Menu Pointer to the menu structure where section items will be added.
+ * \param StartIndex The starting index in the menu where section items should be inserted.
+ */
 VOID PhMwpInitializeSectionMenuItems(
     _In_ PPH_EMENU Menu,
     _In_ ULONG StartIndex
@@ -3937,6 +4456,10 @@ VOID PhMwpInitializeSectionMenuItems(
         PhRemoveEMenuItem(Menu, NULL, StartIndex);
 }
 
+/**
+ * Adjusts the layout of the tab control in the main window by updating the deferred window positioning handle.
+ * \param DeferHandle Pointer to a handle used for deferred window positioning (HDWP).
+ */
 VOID PhMwpLayoutTabControl(
     _Inout_ HDWP *DeferHandle
     )
@@ -3973,8 +4496,10 @@ VOID PhMwpLayoutTabControl(
     }
 }
 
-#pragma warning(push)
-#pragma warning(disable:26454) // The TCN_SEL definitions are negative unsigned (disable useless warning) (dmex)
+/**
+ * Handles notifications from a tab control.
+ * \param Header Pointer to an NMHDR structure containing information about the notification.
+ */
 VOID PhMwpNotifyTabControl(
     _In_ NMHDR *Header
     )
@@ -3988,8 +4513,11 @@ VOID PhMwpNotifyTabControl(
         PhMwpSelectionChangedTabControl(OldTabIndex);
     }
 }
-#pragma warning(pop)
 
+/**
+ * Called when the selection in a tab control has changed.
+ * \param OldIndex The index of the previously selected tab.
+ */
 VOID PhMwpSelectionChangedTabControl(
     _In_ LONG OldIndex
     )
@@ -4061,6 +4589,12 @@ VOID PhMwpSelectionChangedTabControl(
     }
 }
 
+/**
+ * Creates a new main tab page based on the specified template.
+ *
+ * \param Template Pointer to a PPH_MAIN_TAB_PAGE structure that serves as the template for the new page.
+ * \return Pointer to the newly created PPH_MAIN_TAB_PAGE structure.
+ */
 PPH_MAIN_TAB_PAGE PhMwpCreatePage(
     _In_ PPH_MAIN_TAB_PAGE Template
     )
@@ -4091,6 +4625,10 @@ PPH_MAIN_TAB_PAGE PhMwpCreatePage(
     return page;
 }
 
+/**
+ * Selects a page in the main window by its index.
+ * \param Index The zero-based index of the page to select.
+ */
 VOID PhMwpSelectPage(
     _In_ ULONG Index
     )
@@ -4102,6 +4640,12 @@ VOID PhMwpSelectPage(
     PhMwpSelectionChangedTabControl(oldIndex);
 }
 
+/**
+ * Finds a main tab page by its name.
+ *
+ * \param Name A pointer to a PPH_STRINGREF structure containing the name of the page to find.
+ * \return A pointer to the PPH_MAIN_TAB_PAGE structure if found, otherwise NULL.
+ */
 PPH_MAIN_TAB_PAGE PhMwpFindPage(
     _In_ PPH_STRINGREF Name
     )
@@ -4119,6 +4663,14 @@ PPH_MAIN_TAB_PAGE PhMwpFindPage(
     return NULL;
 }
 
+/**
+ * Creates an internal main tab page.
+ *
+ * \param Name The name of the tab page.
+ * \param Flags Flags that specify options for the tab page.
+ * \param Callback Pointer to a callback function for the tab page.
+ * \return A pointer to the newly created PPH_MAIN_TAB_PAGE structure, or NULL on failure.
+ */
 PPH_MAIN_TAB_PAGE PhMwpCreateInternalPage(
     _In_ PCWSTR Name,
     _In_ ULONG Flags,
@@ -4135,6 +4687,13 @@ PPH_MAIN_TAB_PAGE PhMwpCreateInternalPage(
     return PhMwpCreatePage(&page);
 }
 
+/**
+ * Notifies all main tab pages of a specified message.
+ *
+ * \param Message The message to send to all main tab pages.
+ * \param Parameter1 Optional parameter to pass with the message.
+ * \param Parameter2 Optional parameter to pass with the message.
+ */
 VOID PhMwpNotifyAllPages(
     _In_ PH_MAIN_TAB_PAGE_MESSAGE Message,
     _In_opt_ PVOID Parameter1,
@@ -4154,6 +4713,13 @@ VOID PhMwpNotifyAllPages(
     }
 }
 
+/**
+ * Comparison routine that orders processes by CPU usage (descending).
+ *
+ * \param elem1 Pointer to the first element (pointer to PPH_PROCESS_ITEM).
+ * \param elem2 Pointer to the second element (pointer to PPH_PROCESS_ITEM).
+ * \return Negative, zero, or positive value for qsort-style comparison.
+ */
 static int __cdecl IconProcessesCpuUsageCompare(
     _In_ void const* elem1,
     _In_ void const* elem2
@@ -4165,6 +4731,13 @@ static int __cdecl IconProcessesCpuUsageCompare(
     return -singlecmp(processItem1->CpuUsage, processItem2->CpuUsage);
 }
 
+/**
+ * Comparison routine that orders processes by their (case-insensitive) name.
+ *
+ * \param elem1 Pointer to the first element (pointer to PPH_PROCESS_ITEM).
+ * \param elem2 Pointer to the second element (pointer to PPH_PROCESS_ITEM).
+ * \return Negative, zero, or positive value for qsort-style comparison.
+ */
 static int __cdecl IconProcessesNameCompare(
     _In_ void const* elem1,
     _In_ void const* elem2
@@ -4176,6 +4749,12 @@ static int __cdecl IconProcessesNameCompare(
     return PhCompareString(processItem1->ProcessName, processItem2->ProcessName, TRUE);
 }
 
+/**
+ * Adds the mini-process submenu items (priority, I/O priority, actions) for a process.
+ *
+ * \param Menu The parent EMENU item to which process items will be appended.
+ * \param ProcessId The process identifier for which menu entries are created.
+ */
 VOID PhAddMiniProcessMenuItems(
     _Inout_ PPH_EMENU_ITEM Menu,
     _In_ HANDLE ProcessId
@@ -4235,6 +4814,12 @@ VOID PhAddMiniProcessMenuItems(
     PhInsertEMenuItem(Menu, PhCreateEMenuItem(0, ID_PROCESS_PROPERTIES, L"P&roperties", NULL, ProcessId), ULONG_MAX);
 }
 
+/**
+ * Handles a menu item event for the mini-info-window.
+ *
+ * \param MenuItem Pointer to a PH_EMENU_ITEM structure representing the selected menu item.
+ * \return Returns TRUE if the menu item was handled successfully, otherwise FALSE.
+ */
 BOOLEAN PhHandleMiniProcessMenuItem(
     _Inout_ PPH_EMENU_ITEM MenuItem
     )
@@ -4324,6 +4909,12 @@ BOOLEAN PhHandleMiniProcessMenuItem(
     return FALSE;
 }
 
+/**
+ * Adds a specified number of icon processes to the given menu.
+ *
+ * \param Menu Pointer to the menu item where icon processes will be added.
+ * \param NumberOfProcesses The number of icon processes to add.
+ */
 VOID PhMwpAddIconProcesses(
     _In_ PPH_EMENU_ITEM Menu,
     _In_ ULONG NumberOfProcesses
@@ -4411,7 +5002,7 @@ VOID PhMwpAddIconProcesses(
 
         if (icon = PhGetImageListIcon(processItem->SmallIconIndex, FALSE))
         {
-            iconBitmap = PhIconToBitmap(icon, PhSmallIconSize.X, PhSmallIconSize.Y);
+            iconBitmap = PhIconToBitmap(icon, PhGetSystemMetrics(SM_CXSMICON, PhProcessImageListWindowDpi), PhGetSystemMetrics(SM_CYSMICON, PhProcessImageListWindowDpi));
             DestroyIcon(icon);
         }
 
@@ -4427,9 +5018,15 @@ VOID PhMwpAddIconProcesses(
     PhFree(processItems);
 }
 
+/**
+ * Displays the context menu for the application's icon at the specified location.
+ *
+ * \param WindowHandle Handle to the window that owns the icon.
+ * \param Location Screen coordinates where the context menu should appear.
+ */
 VOID PhShowIconContextMenu(
     _In_ HWND WindowHandle,
-    _In_ POINT Location
+    _In_ PPOINT Location
     )
 {
     PPH_EMENU menu;
@@ -4470,8 +5067,8 @@ VOID PhShowIconContextMenu(
         WindowHandle,
         PH_EMENU_SHOW_LEFTRIGHT,
         PH_ALIGN_LEFT | PH_ALIGN_TOP,
-        Location.x,
-        Location.y
+        Location->x,
+        Location->y
         );
 
     if (item)
@@ -4513,6 +5110,12 @@ VOID PhShowIconContextMenu(
     PhDestroyEMenu(menu);
 }
 
+/**
+ * Displays a simple notification balloon from the tray icon.
+ *
+ * \param Title The title text of the notification.
+ * \param Text The body text of the notification.
+ */
 VOID PhShowIconNotification(
     _In_ PCWSTR Title,
     _In_ PCWSTR Text
@@ -4521,6 +5124,16 @@ VOID PhShowIconNotification(
     PhNfShowBalloonTip(Title, Text, 10);
 }
 
+/**
+ * Displays an extended notification from the tray icon with callback support.
+ *
+ * \param Title The title text of the notification.
+ * \param Text The body text of the notification.
+ * \param Timeout Duration (seconds) before the notification is dismissed.
+ * \param Callback Optional callback invoked when the notification is dismissed.
+ * \param Context Context pointer passed to the callback.
+ * \return HRESULT result code.
+ */
 HRESULT PhShowIconNotificationEx(
     _In_ PCWSTR Title,
     _In_ PCWSTR Text,
@@ -4532,6 +5145,12 @@ HRESULT PhShowIconNotificationEx(
     return PhNfShowBalloonTipEx(Title, Text, Timeout, Callback, Context);
 }
 
+/**
+ * Shows detailed information related to the last tray icon notification.
+ *
+ * This function inspects the last notification type and opens the appropriate
+ * UI (process/service) to display details.
+ */
 VOID PhShowDetailsForIconNotification(
     VOID
     )
@@ -4578,6 +5197,11 @@ VOID PhShowDetailsForIconNotification(
     }
 }
 
+/**
+ * Clears stored information about the last tray icon notification.
+ *
+ * Frees any referenced strings and resets the notification type/state.
+ */
 VOID PhMwpClearLastNotificationDetails(
     VOID
     )
@@ -4597,6 +5221,11 @@ VOID PhMwpClearLastNotificationDetails(
 
 // Window plugin extensions (dmex)
 
+/**
+ * Invokes the memory editor dialog from a worker or plugin context.
+ *
+ * \param Parameter Pointer to a PPH_SHOW_MEMORY_EDITOR structure (ownership transferred).
+ */
 VOID PhMwpInvokeShowMemoryEditorDialog(
     _In_ PVOID Parameter
     )
@@ -4617,6 +5246,11 @@ VOID PhMwpInvokeShowMemoryEditorDialog(
     PhFree(showMemoryEditor);
 }
 
+/**
+ * Invokes the memory results dialog from a worker or plugin context.
+ *
+ * \param Parameter Pointer to a PPH_SHOW_MEMORY_RESULTS structure (ownership transferred).
+ */
 VOID PhMwpInvokeShowMemoryResultsDialog(
     _In_ PVOID Parameter
     )
@@ -4635,30 +5269,20 @@ VOID PhMwpInvokeShowMemoryResultsDialog(
     PhFree(showMemoryResults);
 }
 
+/**
+ * Updates the main window font based on saved settings and applies it to controls.
+ *
+ * \param Parameter Optional parameter (unused).
+ */
 VOID PhMwpInvokeUpdateWindowFont(
     _In_opt_ PVOID Parameter
     )
 {
     HFONT oldFont = PhTreeWindowFont;
     HFONT newFont;
-    PPH_STRING fontHexString;
-    LOGFONT font;
 
-    fontHexString = PhaGetStringSetting(L"Font");
-
-    if (
-        fontHexString->Length / sizeof(WCHAR) / 2 == sizeof(LOGFONT) &&
-        PhHexStringToBuffer(&fontHexString->sr, (PUCHAR)&font)
-        )
-    {
-        if (!(newFont = CreateFontIndirect(&font)))
-            return;
-    }
-    else
-    {
-        if (!(newFont = PhCreateIconTitleFont(LayoutWindowDpi)))
-            return;
-    }
+    if (!(newFont = PhCreateTreeWindowFont(LayoutWindowDpi)))
+        return;
 
     PhTreeWindowFont = newFont;
     SetWindowFont(TabControlHandle, PhTreeWindowFont, TRUE);
@@ -4667,37 +5291,32 @@ VOID PhMwpInvokeUpdateWindowFont(
     if (oldFont) DeleteFont(oldFont);
 }
 
+/**
+ * Updates the monospace font used by the UI, based on saved settings.
+ *
+ * \param WindowHandle Optional window handle associated with the update (unused in most callers).
+ * \param Parameter Optional parameter (unused).
+ */
 VOID PhMwpInvokeUpdateWindowFontMonospace(
-    _In_ HWND hwnd,
+    _In_ HWND WindowHandle,
     _In_opt_ PVOID Parameter
     )
 {
     HFONT oldFont = PhMonospaceFont;
     HFONT newFont;
-    PPH_STRING fontHexString;
-    LOGFONT font;
 
-    fontHexString = PhaGetStringSetting(L"FontMonospace");
-
-    if (
-        fontHexString->Length / sizeof(WCHAR) / 2 == sizeof(LOGFONT) &&
-        PhHexStringToBuffer(&fontHexString->sr, (PUCHAR)&font)
-        )
-    {
-        if (!(newFont = CreateFontIndirect(&font)))
-            return;
-    }
-    else
-    {
-        PhMonospaceFont = PhInitializeMonospaceFont(LayoutWindowDpi);
-        if (oldFont) DeleteFont(oldFont);
+    if (!(newFont = PhCreateMonospaceFont(LayoutWindowDpi)))
         return;
-    }
 
     PhMonospaceFont = newFont;
     if (oldFont) DeleteFont(oldFont);
 }
 
+/**
+ * Prepares the application for an early exit by saving settings and marking state.
+ *
+ * \param WindowHandle The main window handle used when saving state.
+ */
 VOID PhMwpInvokePrepareEarlyExit(
     _In_ HWND WindowHandle
     )
@@ -4706,6 +5325,11 @@ VOID PhMwpInvokePrepareEarlyExit(
     PhMainWndEarlyExit = TRUE;
 }
 
+/**
+ * Invokes activation (or toggling) of the main window.
+ *
+ * \param Toggle If TRUE, toggle visibility when appropriate; otherwise ensure window is active.
+ */
 VOID PhMwpInvokeActivateWindow(
     _In_ BOOLEAN Toggle
     )
@@ -4713,6 +5337,11 @@ VOID PhMwpInvokeActivateWindow(
     PhMwpActivateWindow(PhMainWndHandle, Toggle);
 }
 
+/**
+ * Invokes selection of a main tab page on the UI thread.
+ *
+ * \param Parameter Tab index encoded as ULONG via PtrToUlong.
+ */
 VOID PhMwpInvokeSelectTabPage(
     _In_ PVOID Parameter
     )
@@ -4725,6 +5354,11 @@ VOID PhMwpInvokeSelectTabPage(
         SetFocus(CurrentPage->WindowHandle);
 }
 
+/**
+ * Invokes selection of a service item in the services list (posted to main thread).
+ *
+ * \param ServiceItem Pointer to the service item to select.
+ */
 VOID PhMwpInvokeSelectServiceItem(
     _In_ PPH_SERVICE_ITEM ServiceItem
     )
@@ -4740,6 +5374,11 @@ VOID PhMwpInvokeSelectServiceItem(
     }
 }
 
+/**
+ * Invokes selection of a network item in the network list (posted to main thread).
+ *
+ * \param NetworkItem Pointer to the network item to select.
+ */
 VOID PhMwpInvokeSelectNetworkItem(
     _In_ PPH_NETWORK_ITEM NetworkItem
     )
@@ -4748,13 +5387,20 @@ VOID PhMwpInvokeSelectNetworkItem(
 
     PhMwpNeedNetworkTreeList();
 
-    // For compatibility, LParam is a service item, not node.
+    // For compatibility, LParam is a network item, not node.
     if (networkNode = PhFindNetworkNode(NetworkItem))
     {
         PhSelectAndEnsureVisibleNetworkNode(networkNode);
     }
 }
 
+/**
+ * Sends a plugin notification event to registered plugin callbacks.
+ *
+ * \param Type Notification event type.
+ * \param Parameter Additional event-specific parameter.
+ * \return TRUE if the event was handled by a plugin, otherwise FALSE.
+ */
 BOOLEAN PhMwpPluginNotifyEvent(
     _In_ ULONG Type,
     _In_ PVOID Parameter
@@ -4771,8 +5417,104 @@ BOOLEAN PhMwpPluginNotifyEvent(
     return notifyEvent.Handled;
 }
 
+//
+//
+//
+
+SLIST_HEADER PhMainThreadInvokeQueue;
+PH_FREE_LIST PhMainThreadInvokeQueueFreeList;
+volatile LONG PhMainThreadInvokePending = 0;
+
+/**
+ * Queues a command to be executed on the application's main (UI) thread.
+ *
+ * \param Command Function pointer (VOID (NTAPI*)(PVOID)) to invoke on the main thread.
+ * \param Parameter Parameter to pass to the invoked function.
+ * \return NTSTATUS status code (always STATUS_SUCCESS on queueing).
+ */
+NTSTATUS PhInvokeOnMainThread(
+    _In_opt_ PVOID Command,
+    _In_opt_ PVOID Parameter
+    )
+{
+    static PH_INITONCE initOnce = PH_INITONCE_INIT;
+    PPH_INVOKE_ENTRY entry;
+
+    if (PhBeginInitOnce(&initOnce))
+    {
+        PhInitializeSListHead(&PhMainThreadInvokeQueue);
+        PhInitializeFreeList(&PhMainThreadInvokeQueueFreeList, sizeof(PH_INVOKE_ENTRY), 5);
+        PhEndInitOnce(&initOnce);
+    }
+
+    entry = PhAllocateFromFreeList(&PhMainThreadInvokeQueueFreeList);
+    entry->Command = Command;
+    entry->Parameter = Parameter;
+    //entry->ThreadId = NtCurrentThreadId();
+    //entry->SubmitTime = NtGetTickCount64();
+
+    RtlInterlockedPushEntrySList(&PhMainThreadInvokeQueue, &entry->ListEntry);
+
+    // Only post WM_PH_INVOKE if no message is currently pending.
+    // This prevents flooding the message queue with redundant messages while
+    // still ensuring the queue is processed (one message drains all items).
+    if (InterlockedCompareExchange(&PhMainThreadInvokePending, 1, 0) == 0)
+    {
+        PostMessage(PhMainWndHandle, WM_PH_INVOKE, 0, 0);
+    }
+
+    return STATUS_SUCCESS;
+}
+
+/**
+ * Processes and dispatches all pending main-thread invoke queue entries.
+ *
+ * This function is called on the main/UI thread to execute callbacks queued
+ * via PhInvokeOnMainThread.
+ */
+VOID PhProcessInvokeQueue(
+    VOID
+    )
+{
+    PSLIST_ENTRY listEntry;
+    PPH_INVOKE_ENTRY entry;
+
+    listEntry = RtlInterlockedFlushSList(&PhMainThreadInvokeQueue);
+
+    while (listEntry)
+    {
+        entry = CONTAINING_RECORD(listEntry, PH_INVOKE_ENTRY, ListEntry);
+        listEntry = listEntry->Next;
+
+        {
+            PINVOKE_START_ROUTINE function;
+
+            function = entry->Command;
+            function(entry->Parameter);
+        }
+
+        //PH_PLUGIN_INVOKE_EVENT event;
+        //
+        //memset(&event, 0, sizeof(PH_PLUGIN_INVOKE_EVENT));
+        //event.Id = entry->Command;
+        //event.Parameter = entry->Parameter;
+        //
+        //PhInvokeCallback(PhGetGeneralCallback(GeneralCallbackMainWindowThread), &event);
+
+        PhFreeToFreeList(&PhMainThreadInvokeQueueFreeList, entry);
+    }
+}
+
 // Exports for plugin support (dmex)
 
+/**
+ * Plugin-facing helper to invoke main window callbacks or perform window operations.
+ *
+ * \param Event The callback/event type to perform.
+ * \param wparam First parameter (meaning depends on Event).
+ * \param lparam Second parameter (meaning depends on Event).
+ * \return Optional result depending on Event; NULL if none.
+ */
 PVOID PhPluginInvokeWindowCallback(
     _In_ PH_MAINWINDOW_CALLBACK_TYPE Event,
     _In_opt_ PVOID wparam,
@@ -4866,7 +5608,7 @@ PVOID PhPluginInvokeWindowCallback(
         break;
     case PH_MAINWINDOW_CALLBACK_TYPE_UPDATE_FONT:
         {
-            SendMessage(PhMainWndHandle, WM_PH_SELECT_NODE, (WPARAM)5, (LPARAM)lparam);
+            SendMessage(PhMainWndHandle, WM_PH_UPDATE_FONT, 0, (LPARAM)lparam);
         }
         break;
     case PH_MAINWINDOW_CALLBACK_TYPE_GET_FONT:
@@ -4876,7 +5618,7 @@ PVOID PhPluginInvokeWindowCallback(
         break;
     case PH_MAINWINDOW_CALLBACK_TYPE_INVOKE:
         {
-            PostMessage(PhMainWndHandle, WM_PH_INVOKE, (WPARAM)wparam, (LPARAM)lparam);
+            PhInvokeOnMainThread((PVOID)(ULONG_PTR)lparam, (PVOID)wparam);
         }
         break;
     case PH_MAINWINDOW_CALLBACK_TYPE_REFRESH:
@@ -4944,11 +5686,46 @@ PVOID PhPluginInvokeWindowCallback(
             return (PVOID)PhApplicationName;
         }
         break;
+    case PH_MAINWINDOW_CALLBACK_TYPE_GET_MAIN_MENU:
+        {
+            return (PVOID)PhpCreateMainMenu(ULONG_MAX);
+        }
+        break;
+    case PH_MAINWINDOW_CALLBACK_TYPE_GET_MAIN_SUBMENU:
+        {
+            PPH_EMENU menu;
+
+            menu = PhpCreateMainMenu(PtrToUlong(wparam));
+            PhMwpInitializeSubMenu(PhMainWndHandle, menu, PtrToUlong(wparam));
+
+            if (PhPluginsEnabled)
+            {
+                PH_PLUGIN_MENU_INFORMATION pluginMenuInfo;
+
+                PhPluginInitializeMenuInfo(&pluginMenuInfo, menu, PhMainWndHandle, PH_PLUGIN_MENU_DISALLOW_HOOKS);
+                pluginMenuInfo.u.MainMenu.SubMenuIndex = PtrToUlong(wparam);
+                PhInvokeCallback(PhGetGeneralCallback(GeneralCallbackMainMenuInitializing), &pluginMenuInfo);
+            }
+
+            return (PVOID)menu;
+        }
+        break;
+    case PH_MAINWINDOW_CALLBACK_TYPE_SET_MAIN_SUBCMD:
+        {
+            PhMwpDispatchMenuCommand(PhMainWndHandle, PtrToUlong(wparam), (ULONG_PTR)lparam);
+        }
+        break;
     }
 
     return NULL;
 }
 
+/**
+ * Creates a main tab page on behalf of a plugin.
+ *
+ * \param Page Pointer to a PH_MAIN_TAB_PAGE template structure describing the page.
+ * \return Pointer to the newly created PPH_MAIN_TAB_PAGE.
+ */
 PVOID PhPluginCreateTabPage(
     _In_ PVOID Page
     )

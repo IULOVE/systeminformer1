@@ -187,7 +187,7 @@ BOOLEAN PhSipMemorySectionCallback(
     {
     case SysInfoCreate:
         {
-            ShowCommitInSummary = !!PhGetIntegerSetting(L"ShowCommitInSummary");
+            ShowCommitInSummary = !!PhGetIntegerSetting(SETTING_SHOW_COMMIT_IN_SUMMARY);
             MemorySection = Section;
             MemorySlotsTotal = 0;
             MemorySlotsUsed = 0;
@@ -523,7 +523,7 @@ INT_PTR CALLBACK PhSipMemoryDialogProc(
             ShowWindow(MemoryPanel, SW_SHOW);
 
             margin = panelItem->Margin;
-            PhGetSizeDpiValue(&margin, MemorySection->Parameters->WindowDpi, TRUE);
+            PhGetMarginDpiValue(&margin, MemorySection->Parameters->WindowDpi, TRUE);
             PhAddLayoutItemEx(&MemoryLayoutManager, MemoryPanel, NULL, PH_ANCHOR_LEFT | PH_ANCHOR_RIGHT | PH_ANCHOR_BOTTOM, &margin);
 
             PhSipCreateMemoryGraphs();
@@ -681,7 +681,7 @@ VOID PhSipLayoutMemoryGraphs(
     ULONG y;
 
     marginRect = MemoryGraphMargin;
-    PhGetSizeDpiValue(&marginRect, MemorySection->Parameters->WindowDpi, TRUE);
+    PhGetMarginDpiValue(&marginRect, MemorySection->Parameters->WindowDpi, TRUE);
 
     if (!PhGetClientRect(MemoryDialog, &clientRect))
         return;
@@ -1079,7 +1079,7 @@ VOID PhSipUpdateMemoryPanel(
         PhaFormatSize(UInt32x32To64(PhPerfInformation.NonPagedPoolPages, PAGE_SIZE), ULONG_MAX)->Buffer);
 
     if (MemoryTicked > 1)
-        PhSetDialogItemText(MemoryPanel, IDC_ZNONPAGEDALLOCSDELTA_V, PhaFormatUInt64(PagedAllocsDelta.Delta, TRUE)->Buffer);
+        PhSetDialogItemText(MemoryPanel, IDC_ZNONPAGEDALLOCSDELTA_V, PhaFormatUInt64(NonPagedAllocsDelta.Delta, TRUE)->Buffer);
     else
         PhSetDialogItemText(MemoryPanel, IDC_ZNONPAGEDALLOCSDELTA_V, L"-");
 

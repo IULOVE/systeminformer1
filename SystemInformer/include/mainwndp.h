@@ -38,20 +38,22 @@ extern ULONG PhMwpLastNotificationType;
 extern PH_MWP_NOTIFICATION_DETAILS PhMwpLastNotificationDetails;
 
 LRESULT CALLBACK PhMwpWndProc(
-    _In_ HWND hWnd,
-    _In_ UINT uMsg,
+    _In_ HWND WindowHandle,
+    _In_ UINT WindowMessage,
     _In_ WPARAM wParam,
     _In_ LPARAM lParam
     );
 
+//
 // Initialization
+//
 
 RTL_ATOM PhMwpInitializeWindowClass(
     VOID
     );
 
 PPH_STRING PhMwpInitializeWindowTitle(
-    _In_ ULONG KphLevel
+    VOID
     );
 
 VOID PhMwpInitializeProviders(
@@ -105,11 +107,13 @@ VOID PhMwpInvokeUpdateWindowFont(
     );
 
 VOID PhMwpInvokeUpdateWindowFontMonospace(
-    _In_ HWND hwnd,
+    _In_ HWND WindowHandle,
     _In_opt_ PVOID Parameter
     );
 
-// main
+//
+// Main
+//
 
 LONG PhMainMessageLoop(
     VOID
@@ -159,6 +163,10 @@ NTSTATUS PhInitializeExceptionPolicy(
     VOID
     );
 
+NTSTATUS PhInitializeExecutionPolicy(
+    VOID
+    );
+
 NTSTATUS PhInitializeNamespacePolicy(
     VOID
     );
@@ -175,7 +183,9 @@ NTSTATUS PhInitializeTimerPolicy(
     VOID
     );
 
+//
 // Event handlers
+//
 
 VOID PhMwpOnDestroy(
     _In_ HWND WindowHandle
@@ -240,6 +250,12 @@ VOID PhMwpOnSetFocus(
     _In_ HWND WindowHandle
     );
 
+VOID PhMwpOnTimer(
+    _In_ HWND WindowHandle,
+    _In_ WPARAM wParam,
+    _In_ LPARAM lParam
+    );
+
 _Success_(return)
 BOOLEAN PhMwpOnNotify(
     _In_ NMHDR *Header,
@@ -264,7 +280,9 @@ LRESULT PhMwpOnUserMessage(
     _In_ ULONG_PTR LParam
     );
 
+//
 // Settings
+//
 
 VOID PhMwpLoadSettings(
     _In_ HWND WindowHandle
@@ -278,7 +296,9 @@ VOID PhMwpSaveWindowState(
     _In_ HWND WindowHandle
     );
 
+//
 // Misc.
+//
 
 VOID PhMwpUpdateLayoutPadding(
     VOID
@@ -307,7 +327,9 @@ VOID PhMwpActivateWindow(
     _In_ BOOLEAN Toggle
     );
 
+//
 // Main menu
+//
 
 PPH_EMENU PhpCreateMainMenu(
     _In_ ULONG SubMenuIndex
@@ -319,14 +341,12 @@ VOID PhMwpInitializeMainMenu(
 
 VOID PhMwpDispatchMenuCommand(
     _In_ HWND WindowHandle,
-    _In_ HMENU MenuHandle,
-    _In_ ULONG ItemIndex,
     _In_ ULONG ItemId,
     _In_ ULONG_PTR ItemData
     );
 
 VOID PhMwpInitializeSubMenu(
-    _In_ HWND hwnd,
+    _In_ HWND WindowHandle,
     _In_ PPH_EMENU Menu,
     _In_ ULONG Index
     );
@@ -346,7 +366,13 @@ BOOLEAN PhMwpExecuteNotificationSettingsMenuCommand(
     _In_ ULONG Id
     );
 
+PPH_EMENU PhMwpCreateProcessMenu(
+    _In_ BOOLEAN SystemProcess
+    );
+
+//
 // Tab control
+//
 
 VOID PhMwpLayoutTabControl(
     _Inout_ HDWP *DeferHandle
@@ -384,7 +410,9 @@ VOID PhMwpNotifyAllPages(
     _In_opt_ PVOID Parameter2
     );
 
+//
 // Notifications
+//
 
 VOID PhMwpAddIconProcesses(
     _In_ PPH_EMENU_ITEM Menu,
@@ -403,7 +431,28 @@ BOOLEAN PhMwpPluginNotifyEvent(
 typedef struct _PH_MAIN_TAB_PAGE *PPH_MAIN_TAB_PAGE;
 typedef struct _PH_PROVIDER_EVENT_QUEUE PH_PROVIDER_EVENT_QUEUE, *PPH_PROVIDER_EVENT_QUEUE;
 
+typedef _Function_class_(INVOKE_START_ROUTINE)
+NTSTATUS NTAPI INVOKE_START_ROUTINE(
+    _In_ PVOID ThreadParameter
+    );
+typedef INVOKE_START_ROUTINE* PINVOKE_START_ROUTINE;
+
+typedef struct DECLSPEC_ALIGN(MEMORY_ALLOCATION_ALIGNMENT) _PH_INVOKE_ENTRY
+{
+    SLIST_ENTRY ListEntry;
+    PINVOKE_START_ROUTINE Command;
+    PVOID Parameter;
+    //HANDLE ThreadId;
+    //ULONG64 SubmitTime;
+} PH_INVOKE_ENTRY, * PPH_INVOKE_ENTRY;
+
+extern SLIST_HEADER PhMainThreadInvokeQueue;
+extern PH_FREE_LIST PhMainThreadInvokeQueueFreeList;
+extern volatile LONG PhMainThreadInvokePending;
+
+//
 // Processes
+//
 
 extern PPH_MAIN_TAB_PAGE PhMwpProcessesPage;
 extern HWND PhMwpProcessTreeNewHandle;
@@ -509,7 +558,9 @@ VOID PhMwpOnProcessesUpdated(
     _In_ ULONG RunId
     );
 
+//
 // Services
+//
 
 extern PPH_MAIN_TAB_PAGE PhMwpServicesPage;
 extern HWND PhMwpServiceTreeNewHandle;
@@ -581,7 +632,9 @@ VOID PhMwpOnServicesUpdated(
     _In_ ULONG RunId
     );
 
+//
 // Network
+//
 
 extern PPH_MAIN_TAB_PAGE PhMwpNetworkPage;
 extern HWND PhMwpNetworkTreeNewHandle;
@@ -643,7 +696,9 @@ VOID PhMwpOnNetworkItemsUpdated(
     _In_ ULONG RunId
     );
 
+//
 // Devices
+//
 
 VOID PhMwpInitializeDeviceNotifications(
     VOID

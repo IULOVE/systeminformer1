@@ -12,6 +12,7 @@
 #include <phapp.h>
 #include <procprv.h>
 #include <settings.h>
+#include <phsettings.h>
 #include <emenu.h>
 #include <symprv.h>
 #include <workqueue.h>
@@ -242,6 +243,7 @@ VOID PhpLimitedSymbolDereferenceContext(
     }
 }
 
+_Function_class_(USER_THREAD_START_ROUTINE)
 static NTSTATUS PhpLimitedSymbolProviderLookupFunction(
     _In_ PVOID Parameter
     )
@@ -559,8 +561,8 @@ INT_PTR CALLBACK PhPageModifiedDlgProc(
             PhAddListViewColumn(context->ListViewHandle, 4, 4, 4, LVCFMT_LEFT, 100, L"Address");
             PhAddListViewColumn(context->ListViewHandle, 5, 5, 5, LVCFMT_LEFT, 100, L"Symbol");
             PhSetExtendedListView(context->ListViewHandle);
-            PhLoadListViewColumnsFromSetting(L"MemoryModifiedListViewColumns", context->ListViewHandle);
-            PhLoadListViewSortColumnsFromSetting(L"MemoryModifiedListViewSort", context->ListViewHandle);
+            PhLoadListViewColumnsFromSetting(SETTING_MEMORY_MODIFIED_LIST_VIEW_COLUMNS, context->ListViewHandle);
+            PhLoadListViewSortColumnsFromSetting(SETTING_MEMORY_MODIFIED_LIST_VIEW_SORT, context->ListViewHandle);
 
             PhInitializeLayoutManager(&context->LayoutManager, WindowHandle);
             PhAddLayoutItem(&context->LayoutManager, context->ListViewHandle, NULL, PH_ANCHOR_ALL);
@@ -568,8 +570,8 @@ INT_PTR CALLBACK PhPageModifiedDlgProc(
             PhAddLayoutItem(&context->LayoutManager, GetDlgItem(WindowHandle, IDC_REFRESH), NULL, PH_ANCHOR_BOTTOM | PH_ANCHOR_RIGHT);
             PhAddLayoutItem(&context->LayoutManager, GetDlgItem(WindowHandle, IDOK), NULL, PH_ANCHOR_BOTTOM | PH_ANCHOR_RIGHT);
 
-            if (PhValidWindowPlacementFromSetting(L"MemoryModifiedWindowPosition"))
-                PhLoadWindowPlacementFromSetting(L"MemoryModifiedWindowPosition", L"MemoryModifiedWindowSize", WindowHandle);
+            if (PhValidWindowPlacementFromSetting(SETTING_MEMORY_MODIFIED_WINDOW_POSITION))
+                PhLoadWindowPlacementFromSetting(SETTING_MEMORY_MODIFIED_WINDOW_POSITION, SETTING_MEMORY_MODIFIED_WINDOW_SIZE, WindowHandle);
             else
                 PhCenterWindow(WindowHandle, context->ParentWindowHandle);
 
@@ -615,9 +617,9 @@ INT_PTR CALLBACK PhPageModifiedDlgProc(
         break;
     case WM_DESTROY:
         {
-            PhSaveListViewSortColumnsToSetting(L"MemoryModifiedListViewSort", context->ListViewHandle);
-            PhSaveListViewColumnsToSetting(L"MemoryModifiedListViewColumns", context->ListViewHandle);
-            PhSaveWindowPlacementToSetting(L"MemoryModifiedWindowPosition", L"MemoryModifiedWindowSize", WindowHandle);
+            PhSaveListViewSortColumnsToSetting(SETTING_MEMORY_MODIFIED_LIST_VIEW_SORT, context->ListViewHandle);
+            PhSaveListViewColumnsToSetting(SETTING_MEMORY_MODIFIED_LIST_VIEW_COLUMNS, context->ListViewHandle);
+            PhSaveWindowPlacementToSetting(SETTING_MEMORY_MODIFIED_WINDOW_POSITION, SETTING_MEMORY_MODIFIED_WINDOW_SIZE, WindowHandle);
 
             context->Destroying = TRUE;
 
@@ -650,8 +652,10 @@ INT_PTR CALLBACK PhPageModifiedDlgProc(
             switch (GET_WM_COMMAND_ID(wParam, lParam))
             {
             case IDCANCEL:
+                EndDialog(WindowHandle, IDCANCEL);
+                break;
             case IDOK:
-                DestroyWindow(WindowHandle);
+                EndDialog(WindowHandle, IDOK);
                 break;
             case IDC_REFRESH:
                 {
@@ -708,9 +712,7 @@ INT_PTR CALLBACK PhPageModifiedDlgProc(
                 if (point.x == -1 && point.y == -1)
                     PhGetListViewContextMenuPoint(context->ListViewHandle, &point);
 
-                PhGetSelectedListViewItemParams(context->ListViewHandle, &listviewItems, &numberOfItems);
-
-                if (numberOfItems != 0)
+                if (PhGetSelectedListViewItemParams(context->ListViewHandle, &listviewItems, &numberOfItems))
                 {
                     menu = PhCreateEMenu();
                     PhInsertEMenuItem(menu, PhCreateEMenuItem(0, IDC_COPY, L"&Copy", NULL, NULL), ULONG_MAX);

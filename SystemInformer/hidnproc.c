@@ -272,9 +272,7 @@ INT_PTR CALLBACK PhpZombieProcessesDlgProc(
                     ULONG numberOfEntries;
                     ULONG i;
 
-                    PhGetSelectedListViewItemParams(PhZombieProcessesListViewHandle, &entries, &numberOfEntries);
-
-                    if (numberOfEntries != 0)
+                    if (PhGetSelectedListViewItemParams(PhZombieProcessesListViewHandle, &entries, &numberOfEntries))
                     {
                         if (!PhGetIntegerSetting(SETTING_ENABLE_WARNINGS) ||
                             PhShowConfirmMessage(
@@ -334,9 +332,9 @@ INT_PTR CALLBACK PhpZombieProcessesDlgProc(
                                 SendMessage(hwndDlg, WM_COMMAND, IDC_SCAN, 0);
                             }
                         }
-                    }
 
-                    PhFree(entries);
+                        PhFree(entries);
+                    }
                 }
                 break;
             case IDC_SAVE:
@@ -503,9 +501,7 @@ INT_PTR CALLBACK PhpZombieProcessesDlgProc(
                 if (point.x == -1 && point.y == -1)
                     PhGetListViewContextMenuPoint(PhZombieProcessesListViewHandle, &point);
 
-                PhGetSelectedListViewItemParams(PhZombieProcessesListViewHandle, &listviewItems, &numberOfItems);
-
-                if (numberOfItems != 0)
+                if (PhGetSelectedListViewItemParams(PhZombieProcessesListViewHandle, &listviewItems, &numberOfItems))
                 {
                     menu = PhCreateEMenu();
                     PhInsertEMenuItem(menu, PhCreateEMenuItem(0, IDC_COPY, L"&Copy", NULL, NULL), ULONG_MAX);
@@ -541,9 +537,9 @@ INT_PTR CALLBACK PhpZombieProcessesDlgProc(
                     }
 
                     PhDestroyEMenu(menu);
-                }
 
-                PhFree(listviewItems);
+                    PhFree(listviewItems);
+                }
             }
         }
         break;
@@ -622,11 +618,16 @@ COLORREF NTAPI PhpZombieProcessesColorFunction(
 
 BOOLEAN NTAPI PhpZombieProcessesCallback(
     _In_ PPH_ZOMBIE_PROCESS_ENTRY Process,
-    _In_ PVOID Context
+    _In_opt_ PVOID Context
     )
 {
     PPH_ZOMBIE_PROCESS_ENTRY entry;
-    ULONG count = ((PPH_LIST)Context)->Count;
+    ULONG count;
+
+    if (!Context)
+        return FALSE;
+
+    count = ((PPH_LIST)Context)->Count;
 
     for (ULONG i = 0; i < count; i++)
     {
@@ -681,6 +682,7 @@ VOID PhZombieProcessesUpdateListView(
     }
 }
 
+_Success_(NT_SUCCESS(return))
 NTSTATUS PhpCreateProcessItemForZombieProcess(
     _In_ HWND WindowHandle,
     _In_ PPH_ZOMBIE_PROCESS_ENTRY Entry,
@@ -957,6 +959,7 @@ typedef struct _PH_ENUM_NEXT_PROCESS_CONTEXT
     PVOID Context;
 } PH_ENUM_NEXT_PROCESS_CONTEXT, *PPH_ENUM_NEXT_PROCESS_CONTEXT;
 
+_Function_class_(PH_ENUM_NEXT_PROCESS)
 NTSTATUS NTAPI PhpEnumNextProcessHandles(
     _In_ HANDLE ProcessHandle,
     _In_ PVOID Context

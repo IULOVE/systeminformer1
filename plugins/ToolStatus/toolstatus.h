@@ -17,15 +17,17 @@
 #include <phapppub.h>
 #include <phappresource.h>
 #include <phconsole.h>
+#include <mapldr.h>
 #include <hndlinfo.h>
 #include <settings.h>
 #include <searchbox.h>
 
 #include <toolstatusintf.h>
+#include <commdlg.h>
 
 #include "resource.h"
 
-#define PLUGIN_NAME L"ProcessHacker.ToolStatus"
+#define PLUGIN_NAME L"ToolStatus"
 #define SETTING_NAME_TOOLSTATUS_CONFIG (PLUGIN_NAME L".Config")
 #define SETTING_NAME_REBAR_CONFIG (PLUGIN_NAME L".RebarConfig")
 #define SETTING_NAME_TOOLBAR_CONFIG (PLUGIN_NAME L".ToolbarButtonConfig")
@@ -267,7 +269,7 @@ VOID ToolbarLoadSettings(
     _In_ BOOLEAN DpiChanged
     );
 
-VOID ToolbarRemoveButons(
+VOID ToolbarRemoveButtons(
     VOID
     );
 
@@ -276,11 +278,11 @@ VOID ToolbarResetSettings(
     );
 
 PWSTR ToolbarGetText(
-    _In_ UINT CommandID
+    _In_ ULONG CommandID
     );
 
 HBITMAP ToolbarGetImage(
-    _In_ UINT CommandID,
+    _In_ ULONG CommandID,
     _In_ LONG DpiValue
     );
 
@@ -344,7 +346,7 @@ INT_PTR CALLBACK OptionsDlgProc(
 
 // filter.c
 
-BOOLEAN WordMatchStringRef(
+BOOLEAN SearchWordMatchStringRefCallback(
     _In_ PCPH_STRINGREF Text
     );
 
@@ -364,6 +366,25 @@ _Function_class_(PH_TN_FILTER_FUNCTION)
 BOOLEAN NetworkTreeFilterCallback(
     _In_ PPH_TREENEW_NODE Node,
     _In_opt_ PVOID Context
+    );
+
+// find.c
+
+extern ULONG FindDialogMessage;
+
+VOID ShowFindDialog(
+    _In_ HWND OwnerWindow
+    );
+
+BOOLEAN ExecuteFindNext(
+    _In_ BOOLEAN RestartFromTop,
+    _In_ PCPH_STRINGREF String,
+    _In_ BOOLEAN MatchCase,
+    _In_ BOOLEAN MatchWholeWord
+    );
+
+VOID FindDialogHandleFindMessage(
+    _In_ LPARAM lParam
     );
 
 // graph.c
@@ -444,7 +465,7 @@ VOID ToolbarGraphCreatePluginMenu(
     _In_ ULONG MenuId
     );
 
-_Function_class_(TOOLSTATUS_GRAPH_CALLBACK)
+_Function_class_(PH_GRAPH_MESSAGE_CALLBACK)
 BOOLEAN CpuHistoryGraphMessageCallback(
     _In_ HWND WindowHandle,
     _In_ ULONG Message,
@@ -453,7 +474,7 @@ BOOLEAN CpuHistoryGraphMessageCallback(
     _In_ PVOID Context
     );
 
-_Function_class_(TOOLSTATUS_GRAPH_CALLBACK)
+_Function_class_(PH_GRAPH_MESSAGE_CALLBACK)
 BOOLEAN PhysicalHistoryGraphMessageCallback(
     _In_ HWND WindowHandle,
     _In_ ULONG Message,
@@ -462,7 +483,7 @@ BOOLEAN PhysicalHistoryGraphMessageCallback(
     _In_ PVOID Context
     );
 
-_Function_class_(TOOLSTATUS_GRAPH_CALLBACK)
+_Function_class_(PH_GRAPH_MESSAGE_CALLBACK)
 BOOLEAN CommitHistoryGraphMessageCallback(
     _In_ HWND WindowHandle,
     _In_ ULONG Message,
@@ -471,7 +492,7 @@ BOOLEAN CommitHistoryGraphMessageCallback(
     _In_ PVOID Context
     );
 
-_Function_class_(TOOLSTATUS_GRAPH_CALLBACK)
+_Function_class_(PH_GRAPH_MESSAGE_CALLBACK)
 BOOLEAN IoHistoryGraphMessageCallback(
     _In_ HWND WindowHandle,
     _In_ ULONG Message,
@@ -573,9 +594,9 @@ typedef struct _CUSTOMIZE_CONTEXT
     COLORREF TextColor;
 
     LONG WindowDpi;
-    INT CXWidth;
-    INT ImageWidth;
-    INT ImageHeight;
+    LONG CXWidth;
+    LONG ImageWidth;
+    LONG ImageHeight;
 
     HWND WindowHandle;
     HWND AvailableListHandle;
@@ -588,7 +609,7 @@ typedef struct _CUSTOMIZE_CONTEXT
 
 HICON CustomizeGetToolbarIcon(
     _In_ PCUSTOMIZE_CONTEXT Context,
-    _In_ INT CommandID,
+    _In_ LONG CommandID,
     _In_ LONG DpiValue
     );
 

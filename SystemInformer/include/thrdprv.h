@@ -44,13 +44,18 @@ typedef struct _PH_THREAD_ITEM
     KPRIORITY Priority;
     KPRIORITY BasePriority;
     KPRIORITY ActualBasePriority; // KeSetActualBasePriorityThread (jxy-s)
-    PKAFFINITY AffinityMasks; // PhSystemProcessorInformation.NumberOfProcessorGroups
+    union
+    {
+        KAFFINITY AffinityMaskSingle; // Single processor group
+        PKAFFINITY AffinityMaskGroups; // Multiple processor groups * PhSystemProcessorInformation.NumberOfProcessorGroups
+    };
     ULONG AffinityPopulationCount;
     ULONG WaitTime;
     KTHREAD_STATE State;
     KWAIT_REASON WaitReason;
 
     HANDLE ThreadHandle;
+    HANDLE FreezeHandle;
 
     PPH_STRING ServiceName;
 

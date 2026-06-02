@@ -163,6 +163,7 @@ PH_QUEUED_LOCK EtGpuRunningTimeHashTableLock = PH_QUEUED_LOCK_INIT;
 PPH_HASHTABLE EtGpuProcessCounterHashTable = NULL;
 PPH_HASHTABLE EtGpuAdapterDedicatedHashTable = NULL;
 
+_Function_class_(PH_HASHTABLE_EQUAL_FUNCTION)
 static BOOLEAN NTAPI EtGpuTotalEqualFunction(
     _In_ PVOID Entry1,
     _In_ PVOID Entry2
@@ -175,6 +176,7 @@ static BOOLEAN NTAPI EtGpuTotalEqualFunction(
         entry1->AdapterLuid == entry2->AdapterLuid;
 }
 
+_Function_class_(PH_HASHTABLE_HASH_FUNCTION)
 static ULONG NTAPI EtGpuTotalHashFunction(
     _In_ PVOID Entry
     )
@@ -184,6 +186,7 @@ static ULONG NTAPI EtGpuTotalHashFunction(
     return entry->EngineId ^ entry->AdapterLuid;
 }
 
+_Function_class_(PH_HASHTABLE_EQUAL_FUNCTION)
 static BOOLEAN NTAPI EtGpuRunningTimeEqualFunction(
     _In_ PVOID Entry1,
     _In_ PVOID Entry2
@@ -197,6 +200,7 @@ static BOOLEAN NTAPI EtGpuRunningTimeEqualFunction(
         entry1->AdapterLuid == entry2->AdapterLuid;
 }
 
+_Function_class_(PH_HASHTABLE_HASH_FUNCTION)
 static ULONG NTAPI EtGpuRunningTimeHashFunction(
     _In_ PVOID Entry
     )
@@ -206,6 +210,7 @@ static ULONG NTAPI EtGpuRunningTimeHashFunction(
     return (entry->ProcessId / 4) ^ entry->EngineId ^ entry->AdapterLuid;
 }
 
+_Function_class_(PH_HASHTABLE_EQUAL_FUNCTION)
 static BOOLEAN NTAPI EtGpuProcessEqualFunction(
     _In_ PVOID Entry1,
     _In_ PVOID Entry2
@@ -218,6 +223,7 @@ static BOOLEAN NTAPI EtGpuProcessEqualFunction(
         entry1->AdapterLuid == entry2->AdapterLuid;
 }
 
+_Function_class_(PH_HASHTABLE_HASH_FUNCTION)
 static ULONG NTAPI EtGpuProcessHashFunction(
     _In_ PVOID Entry
     )
@@ -227,15 +233,7 @@ static ULONG NTAPI EtGpuProcessHashFunction(
     return (entry->ProcessId / 4) ^ entry->AdapterLuid;
 }
 
-static ULONG NTAPI EtGpuAdapterDedicatedHashFunction(
-    _In_ PVOID Entry
-    )
-{
-    PET_GPU_ADAPTER_COUNTER entry = Entry;
-
-    return entry->AdapterLuid;
-}
-
+_Function_class_(PH_HASHTABLE_EQUAL_FUNCTION)
 static BOOLEAN NTAPI EtGpuAdapterDedicatedEqualFunction(
     _In_ PVOID Entry1,
     _In_ PVOID Entry2
@@ -245,6 +243,16 @@ static BOOLEAN NTAPI EtGpuAdapterDedicatedEqualFunction(
     PET_GPU_ADAPTER_COUNTER entry2 = Entry2;
 
     return entry1->AdapterLuid == entry2->AdapterLuid;
+}
+
+_Function_class_(PH_HASHTABLE_HASH_FUNCTION)
+static ULONG NTAPI EtGpuAdapterDedicatedHashFunction(
+    _In_ PVOID Entry
+    )
+{
+    PET_GPU_ADAPTER_COUNTER entry = Entry;
+
+    return entry->AdapterLuid;
 }
 
 VOID EtGpuCreatePerfCounterHashTables(
@@ -290,6 +298,7 @@ VOID EtGpuDeletePerfCounterHashTables(
     PhDereferenceObject(EtGpuAdapterDedicatedHashTable);
 }
 
+_Function_class_(PH_HASHTABLE_EQUAL_FUNCTION)
 BOOLEAN NTAPI EtPerfCounterInstanceEqualFunction(
     _In_ PVOID Entry1,
     _In_ PVOID Entry2)
@@ -300,6 +309,7 @@ BOOLEAN NTAPI EtPerfCounterInstanceEqualFunction(
     return entry1->InstanceId == entry2->InstanceId;
 }
 
+_Function_class_(PH_HASHTABLE_HASH_FUNCTION)
 ULONG NTAPI EtPerfCounterInstanceHashFunction(
     _In_ PVOID Entry)
 {
@@ -308,25 +318,8 @@ ULONG NTAPI EtPerfCounterInstanceHashFunction(
     return entry->InstanceId;
 }
 
+_Function_class_(PH_HASHTABLE_EQUAL_FUNCTION)
 BOOLEAN NTAPI EtGpuPerfCounterProcessEqualFunction(
-    _In_ PVOID Entry1,
-    _In_ PVOID Entry2)
-{
-    PET_GPU_PROCESS_PERFCOUNTER entry1 = Entry1;
-    PET_GPU_ADAPTER_PERFCOUNTER entry2 = Entry2;
-
-    return entry1->InstanceId == entry2->InstanceId;
-}
-
-ULONG NTAPI EtGpuPerfCounterProcessHashFunction(
-    _In_ PVOID Entry)
-{
-    PET_GPU_ADAPTER_PERFCOUNTER entry = Entry;
-
-    return entry->InstanceId;
-}
-
-BOOLEAN NTAPI EtGpuPerfCounterAdapterEqualFunction(
     _In_ PVOID Entry1,
     _In_ PVOID Entry2)
 {
@@ -336,10 +329,31 @@ BOOLEAN NTAPI EtGpuPerfCounterAdapterEqualFunction(
     return entry1->InstanceId == entry2->InstanceId;
 }
 
-ULONG NTAPI EtGpuPerfCounterAdapterHashFunction(
+_Function_class_(PH_HASHTABLE_HASH_FUNCTION)
+ULONG NTAPI EtGpuPerfCounterProcessHashFunction(
     _In_ PVOID Entry)
 {
     PET_GPU_PROCESS_PERFCOUNTER entry = Entry;
+
+    return entry->InstanceId;
+}
+
+_Function_class_(PH_HASHTABLE_EQUAL_FUNCTION)
+BOOLEAN NTAPI EtGpuPerfCounterAdapterEqualFunction(
+    _In_ PVOID Entry1,
+    _In_ PVOID Entry2)
+{
+    PET_GPU_ADAPTER_PERFCOUNTER entry1 = Entry1;
+    PET_GPU_ADAPTER_PERFCOUNTER entry2 = Entry2;
+
+    return entry1->InstanceId == entry2->InstanceId;
+}
+
+_Function_class_(PH_HASHTABLE_HASH_FUNCTION)
+ULONG NTAPI EtGpuPerfCounterAdapterHashFunction(
+    _In_ PVOID Entry)
+{
+    PET_GPU_ADAPTER_PERFCOUNTER entry = Entry;
 
     return entry->InstanceId;
 }
@@ -570,8 +584,8 @@ PET_GPU_ENGINE_PERFCOUNTER EtPerfCounterAddOrUpdateGpuEngineCounters(
 
         if (numerator)
         {
-            DOUBLE denomenator = (DOUBLE)entry->InstanceTime - (DOUBLE)CounterInstance.InstanceTime;
-            DOUBLE value = (numerator / denomenator) * 100.0;
+            DOUBLE denominator = (DOUBLE)entry->InstanceTime - (DOUBLE)CounterInstance.InstanceTime;
+            DOUBLE value = (numerator / denominator) * 100.0;
 
             if (value > 0.0 && value < 100.0)
             {
@@ -722,10 +736,9 @@ VOID EtPerfCounterCleanupDeletedGpuEngineCounters(
     _In_ ULONG NumberOfCounters
     )
 {
-    PPH_LIST countersToAdd = NULL;
     PPH_HASHTABLE newHashTable;
     PPH_HASHTABLE oldHashTable;
-    PET_GPU_PROCESS_PERFCOUNTER counter;
+    PET_GPU_ENGINE_PERFCOUNTER counter;
     PH_HASHTABLE_ENUM_CONTEXT enumContext;
 
     newHashTable = PhCreateHashtable(
@@ -873,7 +886,7 @@ VOID EtPerfCounterCleanupDeletedGpuAdapterCounters(
 {
     PPH_HASHTABLE newHashTable;
     PPH_HASHTABLE oldHashTable;
-    PET_GPU_PROCESS_PERFCOUNTER counter;
+    PET_GPU_ADAPTER_PERFCOUNTER counter;
     PH_HASHTABLE_ENUM_CONTEXT enumContext;
 
     newHashTable = PhCreateHashtable(
@@ -1119,7 +1132,8 @@ ULONG EtPerfCounterAddCounters(
 _Success_(return)
 BOOLEAN EtPerfCounterGetCounterData(
     _In_ HANDLE CounterHandle,
-    _Out_ PPERF_DATA_HEADER *CounterBuffer
+    _Out_ PPERF_DATA_HEADER *CounterBuffer,
+    _Out_ PULONG CounterBufferSize
     )
 {
     static ULONG initialBufferSize = 0x4000;
@@ -1154,13 +1168,14 @@ BOOLEAN EtPerfCounterGetCounterData(
 
     if (status == ERROR_SUCCESS)
     {
-        if (initialBufferSize > bufferSize)
-            initialBufferSize = bufferSize;
+        initialBufferSize = bufferSize;
 
         *CounterBuffer = buffer;
+        *CounterBufferSize = bufferSize;
         return TRUE;
     }
 
+    PhFree(buffer);
     return FALSE;
 }
 
@@ -1287,7 +1302,7 @@ ULONG EtPerfCounterOpenHandle(
     )
 {
     ULONG status;
-    HANDLE perfQueryHandle;
+    HANDLE perfQueryHandle = NULL;
     ULONG counterIdentifierLength;
     PPERF_COUNTER_IDENTIFIER counterIdentifierBuffer;
     PPERF_COUNTER_IDENTIFIER counterIdentifierEngine;
@@ -1295,7 +1310,7 @@ ULONG EtPerfCounterOpenHandle(
     PPERF_COUNTER_IDENTIFIER counterIdentifierProcess;
 
     counterIdentifierLength = ALIGN_UP_BY(sizeof(PERF_COUNTER_IDENTIFIER) + sizeof(PERF_WILDCARD_INSTANCE), 8) * 3;
-    counterIdentifierBuffer = _malloca(counterIdentifierLength);
+    counterIdentifierBuffer = PhAllocateStack(counterIdentifierLength);
 
     if (!counterIdentifierBuffer)
         return ERROR_INSUFFICIENT_BUFFER;
@@ -1354,12 +1369,17 @@ ULONG EtPerfCounterOpenHandle(
     //EtPerfCounterDumpCounterInfo(GUID_GPU_PROCESSMEMORY);
 
     *PerfQueryHandle = perfQueryHandle;
-    _freea(counterIdentifierBuffer);
+
+    PhFreeStack(counterIdentifierBuffer);
     return status;
 
 CleanupExit:
-    PerfCloseQueryHandle(perfQueryHandle);
-    _freea(counterIdentifierBuffer);
+    if (perfQueryHandle)
+    {
+        PerfCloseQueryHandle(perfQueryHandle);
+    }
+
+    PhFreeStack(counterIdentifierBuffer);
     return status;
 }
 
@@ -1369,6 +1389,7 @@ NTSTATUS EtpUpdatePerfCounterData(
 {
     static HANDLE perfQueryHandle = NULL;
     PPERF_DATA_HEADER perfQueryBuffer;
+    ULONG perfQueryBufferSize;
     PPERF_COUNTER_HEADER perfCounterHeader;
     PET_GPU_ENGINE_PERF_COUNTER gpuEngineCounters = NULL;
     PET_GPU_PROCESSMEMORY_PERF_COUNTER gpuProcessCounters = NULL;
@@ -1386,7 +1407,7 @@ NTSTATUS EtpUpdatePerfCounterData(
             return STATUS_UNSUCCESSFUL;
     }
 
-    if (!EtPerfCounterGetCounterData(perfQueryHandle, &perfQueryBuffer))
+    if (!EtPerfCounterGetCounterData(perfQueryHandle, &perfQueryBuffer, &perfQueryBufferSize))
         return STATUS_UNSUCCESSFUL;
 
     if (perfQueryBuffer->dwNumCounters != 3)
@@ -1398,26 +1419,55 @@ NTSTATUS EtpUpdatePerfCounterData(
     cleanupCounters = EtGpuCleanupCounters();
     EtGpuResetHashtables();
 
+    if (perfQueryBufferSize < sizeof(PERF_DATA_HEADER))
+    {
+        PhFree(perfQueryBuffer);
+        return STATUS_UNSUCCESSFUL;
+    }
+
     perfCounterHeader = PTR_ADD_OFFSET(perfQueryBuffer, sizeof(PERF_DATA_HEADER));
 
     for (i = 0; i < perfQueryBuffer->dwNumCounters; i++)
     {
+        if ((ULONG_PTR)perfCounterHeader - (ULONG_PTR)perfQueryBuffer + sizeof(PERF_COUNTER_HEADER) > perfQueryBufferSize)
+            break;
+
         if (perfCounterHeader->dwStatus != ERROR_SUCCESS)
+        {
+            if (perfCounterHeader->dwSize < sizeof(PERF_COUNTER_HEADER))
+                break;
+            perfCounterHeader = PTR_ADD_OFFSET(perfCounterHeader, perfCounterHeader->dwSize);
             continue;
+        }
 
         switch (perfCounterHeader->dwType)
         {
         case PERF_MULTIPLE_INSTANCES:
             {
                 PPERF_MULTI_INSTANCES perfMultipleInstance = PTR_ADD_OFFSET(perfCounterHeader, sizeof(PERF_COUNTER_HEADER));
-                PPERF_INSTANCE_HEADER perfCurrentInstance = PTR_ADD_OFFSET(perfMultipleInstance, sizeof(PERF_MULTI_INSTANCES));
+                PPERF_INSTANCE_HEADER perfCurrentInstance;
                 ULONG count = 0;
                 ULONG index = 0;
+
+                if ((ULONG_PTR)perfMultipleInstance - (ULONG_PTR)perfQueryBuffer + sizeof(PERF_MULTI_INSTANCES) > perfQueryBufferSize)
+                    break;
+
+                perfCurrentInstance = PTR_ADD_OFFSET(perfMultipleInstance, sizeof(PERF_MULTI_INSTANCES));
 
                 // Do a scan and determine how many instances have values.
                 for (j = 0; j < perfMultipleInstance->dwInstances; j++)
                 {
-                    PET_GPU_COUNTER_DATA perfCounterData = PTR_ADD_OFFSET(perfCurrentInstance, perfCurrentInstance->Size);
+                    PET_GPU_COUNTER_DATA perfCounterData;
+
+                    if ((ULONG_PTR)perfCurrentInstance - (ULONG_PTR)perfQueryBuffer + sizeof(PERF_INSTANCE_HEADER) > perfQueryBufferSize)
+                        break;
+                    if ((ULONG_PTR)perfCurrentInstance - (ULONG_PTR)perfQueryBuffer + perfCurrentInstance->Size > perfQueryBufferSize)
+                        break;
+
+                    perfCounterData = PTR_ADD_OFFSET(perfCurrentInstance, perfCurrentInstance->Size);
+
+                    if ((ULONG_PTR)perfCounterData - (ULONG_PTR)perfQueryBuffer + sizeof(ET_GPU_COUNTER_DATA) > perfQueryBufferSize)
+                        break;
 
                     if (perfCounterData->Value)
                     {
@@ -1432,6 +1482,8 @@ NTSTATUS EtpUpdatePerfCounterData(
                         }
                     }
 
+                    if (perfCounterData->Size < sizeof(ET_GPU_COUNTER_DATA))
+                        break;
                     perfCurrentInstance = PTR_ADD_OFFSET(perfCounterData, perfCounterData->Size);
                 }
 
@@ -1460,17 +1512,32 @@ NTSTATUS EtpUpdatePerfCounterData(
 
                 for (j = 0; j < perfMultipleInstance->dwInstances; j++)
                 {
-                    PET_GPU_COUNTER_DATA perfCounterData = PTR_ADD_OFFSET(perfCurrentInstance, perfCurrentInstance->Size);
+                    PET_GPU_COUNTER_DATA perfCounterData;
+
+                    if ((ULONG_PTR)perfCurrentInstance - (ULONG_PTR)perfQueryBuffer + sizeof(PERF_INSTANCE_HEADER) > perfQueryBufferSize)
+                        break;
+                    if ((ULONG_PTR)perfCurrentInstance - (ULONG_PTR)perfQueryBuffer + perfCurrentInstance->Size > perfQueryBufferSize)
+                        break;
+
+                    perfCounterData = PTR_ADD_OFFSET(perfCurrentInstance, perfCurrentInstance->Size);
+
+                    if ((ULONG_PTR)perfCounterData - (ULONG_PTR)perfQueryBuffer + sizeof(ET_GPU_COUNTER_DATA) > perfQueryBufferSize)
+                        break;
 
                     if (perfCounterData->Value)
                     {
                         PWSTR instanceName = PTR_ADD_OFFSET(perfCurrentInstance, sizeof(PERF_INSTANCE_HEADER));
+                        ULONG instanceNameMaxLen = (perfCurrentInstance->Size > sizeof(PERF_INSTANCE_HEADER)) ? (perfCurrentInstance->Size - sizeof(PERF_INSTANCE_HEADER)) : 0;
+
+                        // Basic check for instanceName string validity
+                        if ((ULONG_PTR)instanceName - (ULONG_PTR)perfQueryBuffer + instanceNameMaxLen > perfQueryBufferSize)
+                            instanceName = L"Unknown";
 
                         switch (i)
                         {
                         case ET_GPU_ADAPTERMEMORY_COUNTER_INDEX:
                             {
-                                if (gpuAdapterCounters)
+                                if (gpuAdapterCounters && index < numberOfGpuAdapterCounters)
                                 {
                                     gpuAdapterCounters[index].InstanceId = perfCurrentInstance->InstanceId;
                                     gpuAdapterCounters[index].InstanceName = instanceName;
@@ -1481,7 +1548,7 @@ NTSTATUS EtpUpdatePerfCounterData(
                             break;
                         case ET_GPU_ENGINE_COUNTER_INDEX:
                             {
-                                if (gpuEngineCounters)
+                                if (gpuEngineCounters && index < numberOfGpuEngineCounters)
                                 {
                                     gpuEngineCounters[index].InstanceId = perfCurrentInstance->InstanceId;
                                     gpuEngineCounters[index].InstanceName = instanceName;
@@ -1494,6 +1561,8 @@ NTSTATUS EtpUpdatePerfCounterData(
                         }
                     }
 
+                    if (perfCounterData->Size < sizeof(ET_GPU_COUNTER_DATA))
+                        break;
                     perfCurrentInstance = PTR_ADD_OFFSET(perfCounterData, perfCounterData->Size);
                 }
             }
@@ -1501,21 +1570,28 @@ NTSTATUS EtpUpdatePerfCounterData(
         case PERF_COUNTERSET:
             {
                 PPERF_MULTI_COUNTERS perfMultipleCounters = PTR_ADD_OFFSET(perfCounterHeader, sizeof(PERF_COUNTER_HEADER));
-                PPERF_MULTI_INSTANCES perfMultipleInstance = PTR_ADD_OFFSET(perfMultipleCounters, perfMultipleCounters->dwSize);
-                PPERF_INSTANCE_HEADER perfCurrentInstance = PTR_ADD_OFFSET(perfMultipleInstance, sizeof(PERF_MULTI_INSTANCES));
-                PULONG perfCounterIdArray = PTR_ADD_OFFSET(perfMultipleCounters, sizeof(PERF_MULTI_COUNTERS));
+                PPERF_MULTI_INSTANCES perfMultipleInstance;
+                PPERF_INSTANCE_HEADER perfCurrentInstance;
+                PULONG perfCounterIdArray;
+
+                if ((ULONG_PTR)perfMultipleCounters - (ULONG_PTR)perfQueryBuffer + sizeof(PERF_MULTI_COUNTERS) > perfQueryBufferSize)
+                    break;
+                if (perfMultipleCounters->dwSize < sizeof(PERF_MULTI_COUNTERS))
+                    break;
+                if ((ULONG_PTR)perfMultipleCounters - (ULONG_PTR)perfQueryBuffer + perfMultipleCounters->dwSize + sizeof(PERF_MULTI_INSTANCES) > perfQueryBufferSize)
+                    break;
+
+                perfMultipleInstance = PTR_ADD_OFFSET(perfMultipleCounters, perfMultipleCounters->dwSize);
+                perfCurrentInstance = PTR_ADD_OFFSET(perfMultipleInstance, sizeof(PERF_MULTI_INSTANCES));
+                perfCounterIdArray = PTR_ADD_OFFSET(perfMultipleCounters, sizeof(PERF_MULTI_COUNTERS));
+
+                if ((ULONG_PTR)perfCounterIdArray - (ULONG_PTR)perfQueryBuffer + (ULONG_PTR)perfMultipleCounters->dwCounters * sizeof(ULONG) > perfQueryBufferSize)
+                    break;
 
                 if (perfMultipleInstance->dwInstances)
                 {
                     switch (i)
                     {
-                    //case ET_GPU_ADAPTERMEMORY_COUNTER_INDEX:
-                    //    {
-                    //        numberOfGpuAdapterCounters = perfMultipleInstance->dwInstances;
-                    //        gpuAdapterCounters = PhAllocate(sizeof(ET_GPU_ADAPTER_PERF_COUNTER) * numberOfGpuAdapterCounters);
-                    //        memset(gpuAdapterCounters, 0, sizeof(ET_GPU_ADAPTER_PERF_COUNTER)* numberOfGpuAdapterCounters);
-                    //    }
-                    //    break;
                     case ET_GPU_PROCESSMEMORY_COUNTER_INDEX:
                         {
                             numberOfGpuProcessCounters = perfMultipleInstance->dwInstances;
@@ -1528,17 +1604,26 @@ NTSTATUS EtpUpdatePerfCounterData(
 
                 for (j = 0; j < perfMultipleInstance->dwInstances; j++)
                 {
-                    PET_GPU_COUNTER_DATA currentCounterData = PTR_ADD_OFFSET(perfCurrentInstance, perfCurrentInstance->Size);
-                    PWSTR instanceName = PTR_ADD_OFFSET(perfCurrentInstance, sizeof(PERF_INSTANCE_HEADER));
+                    PET_GPU_COUNTER_DATA currentCounterData;
+                    PWSTR instanceName;
+                    ULONG instanceNameMaxLen;
 
-                    if (gpuProcessCounters)
+                    if ((ULONG_PTR)perfCurrentInstance - (ULONG_PTR)perfQueryBuffer + sizeof(PERF_INSTANCE_HEADER) > perfQueryBufferSize)
+                        break;
+                    if ((ULONG_PTR)perfCurrentInstance - (ULONG_PTR)perfQueryBuffer + perfCurrentInstance->Size > perfQueryBufferSize)
+                        break;
+
+                    currentCounterData = PTR_ADD_OFFSET(perfCurrentInstance, perfCurrentInstance->Size);
+                    instanceName = PTR_ADD_OFFSET(perfCurrentInstance, sizeof(PERF_INSTANCE_HEADER));
+                    instanceNameMaxLen = (perfCurrentInstance->Size > sizeof(PERF_INSTANCE_HEADER)) ? (perfCurrentInstance->Size - sizeof(PERF_INSTANCE_HEADER)) : 0;
+
+                    if ((ULONG_PTR)instanceName - (ULONG_PTR)perfQueryBuffer + instanceNameMaxLen > perfQueryBufferSize)
+                        instanceName = L"Unknown";
+
+                    if (gpuProcessCounters && j < numberOfGpuProcessCounters)
                     {
                         switch (i)
                         {
-                        //case ET_GPU_ADAPTERMEMORY_COUNTER_INDEX:
-                        //    gpuAdapterCounters[j].InstanceId = perfCurrentInstance->InstanceId;
-                        //    gpuAdapterCounters[j].InstanceName = instanceName;
-                        //    break;
                         case ET_GPU_PROCESSMEMORY_COUNTER_INDEX:
                             {
                                 gpuProcessCounters[j].InstanceId = perfCurrentInstance->InstanceId;
@@ -1550,32 +1635,18 @@ NTSTATUS EtpUpdatePerfCounterData(
 
                     for (ULONG k = 0; k < perfMultipleCounters->dwCounters; k++)
                     {
-                        ULONG currentCounterId = perfCounterIdArray[k];
+                        ULONG currentCounterId;
+
+                        if ((ULONG_PTR)currentCounterData - (ULONG_PTR)perfQueryBuffer + sizeof(ET_GPU_COUNTER_DATA) > perfQueryBufferSize)
+                            break;
+
+                        currentCounterId = perfCounterIdArray[k];
 
                         switch (i)
                         {
-                        //case ET_GPU_ADAPTERMEMORY_COUNTER_INDEX:
-                        //    {
-                        //        if (gpuAdapterCounters)
-                        //        {
-                        //            switch (currentCounterId)
-                        //            {
-                        //            case ET_GPU_ADAPTERMEMORY_TOTALCOMMITTED_INDEX:
-                        //                gpuAdapterCounters[j].CommitUsage = currentCounterData->Value;
-                        //                break;
-                        //            case ET_GPU_ADAPTERMEMORY_DEDICATEDUSAGE_INDEX:
-                        //                gpuAdapterCounters[j].DedicatedUsage = currentCounterData->Value;
-                        //                break;
-                        //            case ET_GPU_ADAPTERMEMORY_SHAREDUSAGE_INDEX:
-                        //                gpuAdapterCounters[j].SharedUsage = currentCounterData->Value;
-                        //                break;
-                        //            }
-                        //        }
-                        //    }
-                        //    break;
                         case ET_GPU_PROCESSMEMORY_COUNTER_INDEX:
                             {
-                                if (gpuProcessCounters)
+                                if (gpuProcessCounters && j < numberOfGpuProcessCounters)
                                 {
                                     switch (currentCounterId)
                                     {
@@ -1594,6 +1665,8 @@ NTSTATUS EtpUpdatePerfCounterData(
                             break;
                         }
 
+                        if (currentCounterData->Size < sizeof(ET_GPU_COUNTER_DATA))
+                            break;
                         currentCounterData = PTR_ADD_OFFSET(currentCounterData, currentCounterData->Size);
                     }
 
@@ -1603,6 +1676,8 @@ NTSTATUS EtpUpdatePerfCounterData(
             break;
         }
 
+        if (perfCounterHeader->dwSize < sizeof(PERF_COUNTER_HEADER))
+            break;
         perfCounterHeader = PTR_ADD_OFFSET(perfCounterHeader, perfCounterHeader->dwSize);
     }
 
@@ -1728,7 +1803,7 @@ BOOLEAN EtpLookupProcessGpuMemoryCounters(
     PET_GPU_PROCESS_COUNTER entry;
 
     if (!EtGpuProcessCounterHashTable)
-        return 0;
+        return FALSE;
 
     enumerationKey = 0;
 
@@ -1750,7 +1825,7 @@ BOOLEAN EtpLookupProcessGpuMemoryCounters(
         }
     }
 
-    if (sharedUsage && dedicatedUsage && commitUsage)
+    if (sharedUsage || dedicatedUsage || commitUsage)
     {
         *SharedUsage = sharedUsage;
         *DedicatedUsage = dedicatedUsage;
